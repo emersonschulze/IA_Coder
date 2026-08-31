@@ -115,8 +115,14 @@ export function Panel({
 
 export const PanelBody = forwardRef<HTMLDivElement, { children: ReactNode; className?: string }>(
   function PanelBody({ children, className }, ref) {
+    // `data-anchor-clip`: as setas param na borda deste painel em vez de
+    // seguirem um card rolado para fora da vista.
     return (
-      <div ref={ref} className={[styles.body, className].filter(Boolean).join(' ')}>
+      <div
+        ref={ref}
+        data-anchor-clip
+        className={[styles.body, className].filter(Boolean).join(' ')}
+      >
         {children}
       </div>
     );

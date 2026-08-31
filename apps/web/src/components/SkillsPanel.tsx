@@ -54,7 +54,7 @@ export function SkillsPanel() {
         ) : ordered.length === 0 ? (
           <PanelEmpty>nenhuma skill com “{query}”</PanelEmpty>
         ) : (
-          ordered.map((skill) => (
+          ordered.map((skill, index) => (
             <div key={skill.id} data-flip-key={skill.id}>
               <EntityCard
                 kind="skill"
@@ -65,6 +65,7 @@ export function SkillsPanel() {
                 color={skill.color}
                 initials={skill.initials}
                 active={skill.inUse}
+                scrollOnActive={!pinActive || index === 0}
               />
             </div>
           ))

@@ -12,6 +12,9 @@ import { useLayoutEffect, useRef } from 'react';
  * embrulho, nunca no card — o card tem transform próprio (o destaque do
  * spotlight) e os dois brigariam.
  */
+/** Acima disso o card sairia da vista no meio do caminho. Em pixels. */
+const LONGE = 260;
+
 export function useFlipList<T extends HTMLElement>() {
   const container = useRef<T>(null);
   const previous = useRef(new Map<string, DOMRect>());
@@ -35,6 +38,17 @@ export function useFlipList<T extends HTMLElement>() {
       const dx = before.left - rect.left;
       const dy = before.top - rect.top;
       if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
+
+      /*
+       * Salto grande não se anima: pula.
+       *
+       * O FLIP desenha o card na posição ANTIGA e o desliza até a nova. Numa
+       * lista de dezenas de skills, promover a que está em uso é um salto de
+       * milhares de pixels: durante a animação o card fica fora do painel, o
+       * painel parece vazio e a seta que aponta para ele fica no vazio junto.
+       * Acompanhar o olho só faz sentido quando o percurso cabe na vista.
+       */
+      if (Math.abs(dx) > LONGE || Math.abs(dy) > LONGE) return;
 
       node.animate(
         [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'translate(0px, 0px)' }],
