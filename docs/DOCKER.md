@@ -28,7 +28,7 @@ docker compose ps
 Sem Adminer no compose — quem usa DBeaver (ou outro cliente) aponta direto
 para `localhost:5433`, usuário e senha do `.env`.
 
-Atalhos:
+Atalhos — no PowerShell:
 
 ```powershell
 .\scripts\infra.ps1 up            # o mesmo que acima
@@ -37,6 +37,45 @@ Atalhos:
 .\scripts\infra.ps1 pull-model    # baixa o modelo de embeddings
 .\scripts\infra.ps1 reset         # apaga os volumes e recria do zero
 ```
+
+Os mesmos atalhos no WSL (é comum subir o compose por lá, mesmo com o servidor
+rodando no Windows). Ele detecta sozinho se o `docker` precisa de `sudo`:
+
+```bash
+./scripts/infra.sh up             # o mesmo que acima
+./scripts/infra.sh up --ai        # + Ollama
+./scripts/infra.sh up --voice     # + Whisper e Piper
+./scripts/infra.sh check          # está tudo no ar E certo?
+./scripts/infra.sh logs whisper   # o log de um serviço só
+./scripts/infra.sh psql
+./scripts/infra.sh pull-model
+./scripts/infra.sh recreate whisper  # um serviço do zero, volume junto
+./scripts/infra.sh reset-db       # recria SÓ o Postgres, reaplicando db/init
+./scripts/infra.sh reset          # apaga TODOS os volumes e recria do zero
+```
+
+O `check` responde à pergunta que `ps` não responde: container verde não quer
+dizer banco pronto. Ele confere conexão, as três extensões, as tabelas que o
+servidor usa (incluindo `subjects` e `components`) e o ping do Redis — e sai com
+código 1 se algo faltar, então serve em script.
+
+Whisper, Piper e Ollama entram na conferência **só se já estiverem de pé**: quem
+não subiu não é problema, mas quem subiu e está em `restarting` é — esse é o laço
+de morte de um container que morre no boot, e nele a interface fica esperando por
+um serviço que nunca vai responder. O `check` aponta o `logs <serviço>`, que é o
+único lugar onde está o motivo.
+
+Vale para os dois lugares: o script funciona tanto em `scripts/`, dentro do
+repositório, quanto solto ao lado do `docker-compose.yml` — que é o caso de quem
+copiou só `db/`, `docker/` e o compose para dentro do WSL. Ele procura o compose
+na própria pasta e, se não achar, na de cima. O `.env` é opcional: sem ele, tudo
+cai nos mesmos padrões do compose.
+
+O `reset-db` existe porque `reset` é caro à toa quando o problema é só o banco:
+ele apaga também os modelos já baixados de Whisper, Piper e Ollama, que são
+gigabytes. O `reset-db` derruba apenas o volume `ia_coder_pgdata` e espera o
+banco aceitar conexão antes de te mostrar as extensões e as tabelas que
+nasceram do `db/init`.
 
 ## Os serviços, e por que cada um existe
 
@@ -67,8 +106,62 @@ ele diz no log qual endereço usou e de onde tirou:
 ```
 
 Os scripts em `db/init/` rodam **uma única vez**, quando o volume é criado. Se você
-mudar o esquema, use `.\scripts\infra.ps1 reset` (apaga os dados) ou aplique uma
-migration manual.
+mudar o esquema, recrie o banco (`.\scripts\infra.ps1 reset` no PowerShell,
+`./scripts/infra.sh reset-db` no WSL) ou aplique uma migration manual.
+
+Sintoma clássico de volume criado ANTES de `db/init/` existir: qualquer coisa que
+toque em `vector(768)` falha com `type "vector" does not exist`, porque o
+`CREATE EXTENSION vector` do `01_extensions.sql` nunca rodou. Como as migrations
+vêm dentro de um `BEGIN`, o resto do arquivo vira uma cascata de
+`current transaction is aborted` e termina em `ROLLBACK` — nada foi aplicado. A
+saída é recriar o volume, não insistir na migration.
+
+E depois de recriar, **não rode `db/migrations/001_tree_dois_niveis.sql`**: o
+`db/init/02_schema.sql` já cria `subjects`, `subject_links` e `components`. Aquela
+migration existe só para volumes anteriores ao Tree de dois níveis.
+
+O `recreate <serviço>` descarta container e volume de um serviço só e o sobe de
+novo, mostrando as primeiras linhas do log — é o caminho para container em laço de
+restart, onde o problema costuma ser algo pela metade dentro do volume (um modelo
+cortado no meio do download, por exemplo). Ele escolhe o perfil sozinho (`whisper`
+e `piper` são `voice`; `ollama` é `ai`) e sabe que o Piper é imagem nossa, então
+reconstrói em vez de baixar. Para o `postgres` ele recusa e manda usar `reset-db`,
+que ainda confere o `db/init` depois.
+
+## Rede que inspeciona TLS (proxy corporativo)
+
+Sintoma: o Whisper (ou o Ollama) morre no boot e fica em laço de restart, com
+esta linha no log:
+
+```
+[SSL: CERTIFICATE_VERIFY_FAILED] unable to get local issuer certificate
+```
+
+O proxy da empresa abre a conexão com o Hugging Face, reassina com o certificado
+dela e reentrega. O Windows confia nessa raiz porque o TI a instalou lá; o
+container não — ele traz só as CAs públicas. Resultado: o download do modelo
+falha na verificação.
+
+A saída é dar a raiz da empresa para o container. Defina no `.env`:
+
+```bash
+CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+```
+
+e o `scripts/infra.sh` passa a incluir sozinho o `docker-compose.proxy.yml`, que
+monta esse arquivo em `/certs/ca.pem` e aponta `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`
+e `CURL_CA_BUNDLE` para lá — três nomes porque três bibliotecas diferentes olham
+cada uma a sua. Na mão, é
+`docker compose -f docker-compose.yml -f docker-compose.proxy.yml … up -d`.
+
+Esse caminho só serve se **o WSL já confiar** no proxy — confira com
+`curl -I https://huggingface.co`. Se o curl falhar igual, instale a raiz no WSL
+antes (exporte o `.crt` pelo `certmgr.msc` do Windows, copie para
+`/usr/local/share/ca-certificates/` e rode `sudo update-ca-certificates`).
+
+O Piper cai na mesma armadilha, com um agravante: ele baixa a voz **na primeira
+fala**, não no boot. Fica verde e saudável até você falar pela primeira vez — por
+isso ele está no `docker-compose.proxy.yml` também.
 
 ### `redis` — redis:7-alpine · porta 6379
 

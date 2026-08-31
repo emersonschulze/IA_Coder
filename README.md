@@ -23,6 +23,7 @@ IA_Coder/
 │   │   └── src/
 │   │       ├── index.ts        # laço principal: comandos do cliente, workflow, heartbeat
 │   │       ├── orchestrator.ts # dono dos agentes/blocos/setas de um workflow
+│   │       ├── discovery.ts    # varre o disco: agentes e skills instalados
 │   │       ├── conversation.ts # o "Talking": chat → plano → confirmação
 │   │       ├── claude.ts       # processo `claude` persistente (stream-json)
 │   │       ├── usage.ts        # consumo real da conta (janela de 5h + limite semanal)
@@ -38,7 +39,8 @@ IA_Coder/
 │   ├── PROTOCOLO.md        # contrato de eventos WebSocket entre web e server
 │   ├── DOCKER.md           # infraestrutura local e por que ela é assim
 │   └── demo.gif            # a demonstração acima
-├── scripts/infra.ps1       # atalhos do compose no Windows
+├── scripts/infra.ps1       # atalhos do compose no Windows (PowerShell)
+├── scripts/infra.sh        # os mesmos atalhos no WSL, + reset-db
 ├── workspace/artifacts/    # artefatos gerados pelos agentes (painel Archives)
 ├── docker-compose.yml
 ├── LICENSE
@@ -67,7 +69,11 @@ IA_Coder/
 5. **O que funcionou uma vez fica guardado.** Confirmando "Guardar no Tree", a análise
    vira um assunto reutilizável (resumo + stack) no painel **Tree** — na próxima vez que
    algo parecido aparecer, o agente já começa sabendo, em vez de investigar tudo de novo.
-6. **O painel Status mostra o consumo real da sua conta** Claude (janela de 5 horas e
+6. **Os painéis Agents e Skill mostram o que está instalado de verdade.** O servidor
+   varre os plugins do Claude Code, o `.claude` do projeto e o seu — se você instalou
+   um plugin com dezesseis agentes, os dezesseis aparecem ali, e o que o Claude usa
+   durante a execução acende no próprio cartão.
+7. **O painel Status mostra o consumo real da sua conta** Claude (janela de 5 horas e
    limite semanal), não um contador por sessão.
 
 Todo o contrato de eventos entre a interface e o servidor está documentado em

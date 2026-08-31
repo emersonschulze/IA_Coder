@@ -11,3 +11,11 @@ Thumbs.db
 # Artefatos gerados pelos agentes: ficam no disco, não no repositório.
 workspace/artifacts/*
 !workspace/artifacts/.gitkeep
+
+# Certificado do proxy corporativo: público, mas identifica a infraestrutura
+# de segurança da empresa — não vai para repositório público.
+certs/
+
+# Guia e scripts do WSL: ficam só na máquina. O README descreve a rede
+# corporativa (proxy que intercepta TLS), que não vai para repositório público.
+WSL/

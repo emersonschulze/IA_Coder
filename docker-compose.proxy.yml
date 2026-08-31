@@ -1,0 +1,40 @@
+# Sobreposição para rede que inspeciona TLS (proxy corporativo).
+#
+# Sintoma: o container morre no boot com
+#   [SSL: CERTIFICATE_VERIFY_FAILED] unable to get local issuer certificate
+# ao baixar um modelo. O proxy reassina o tráfego com o certificado da empresa;
+# o seu Windows confia nessa raiz, o container não — ele só traz as CAs públicas.
+#
+# Uso: aponte CA_BUNDLE no .env para o arquivo .pem da raiz e pronto. Se o seu
+# WSL já confia no proxy (teste com `curl -I https://huggingface.co`), o próprio
+# pacote do sistema serve:
+#
+#   CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+#
+# O scripts/infra.sh inclui este arquivo sozinho quando CA_BUNDLE existe. Na mão:
+#   docker compose -f docker-compose.yml -f docker-compose.proxy.yml --profile voice up -d
+
+services:
+  whisper:
+    volumes:
+      - ${CA_BUNDLE:?defina CA_BUNDLE no .env com o caminho do .pem da raiz}:/certs/ca.pem:ro
+    environment:
+      # Três nomes porque três bibliotecas diferentes olham cada uma a sua:
+      # o ssl do Python, o requests e o curl/httpx.
+      SSL_CERT_FILE: /certs/ca.pem
+      REQUESTS_CA_BUNDLE: /certs/ca.pem
+      CURL_CA_BUNDLE: /certs/ca.pem
+
+  # O Piper baixa a voz do mesmo Hugging Face, mas só na primeira fala — por isso
+  # ele parece saudável até você falar. Cai no mesmo erro; recebe o mesmo remédio.
+  piper:
+    volumes:
+      - ${CA_BUNDLE:?defina CA_BUNDLE no .env com o caminho do .pem da raiz}:/certs/ca.pem:ro
+    environment:
+      SSL_CERT_FILE: /certs/ca.pem
+
+  ollama:
+    volumes:
+      - ${CA_BUNDLE:?defina CA_BUNDLE no .env com o caminho do .pem da raiz}:/certs/ca.pem:ro
+    environment:
+      SSL_CERT_FILE: /certs/ca.pem

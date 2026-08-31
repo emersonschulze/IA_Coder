@@ -1,0 +1,4 @@
+# Script de shell roda no WSL. Se o Git converter para CRLF no checkout, o
+# shebang quebra com "bad interpreter: /usr/bin/env bash^M" — e o erro não diz
+# isso com todas as letras. Estes ficam sempre em LF.
+*.sh text eol=lf

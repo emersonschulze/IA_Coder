@@ -1,7 +1,7 @@
 # Estado do projeto — retomada
 
 > Escrito para você voltar depois de reiniciar a máquina (ou em outra sessão)
-> sem precisar reconstruir contexto. Última atualização: 30/08/2026.
+> sem precisar reconstruir contexto. Última atualização: 31/08/2026.
 
 ## Em uma frase
 
@@ -200,6 +200,64 @@ demonstração (`docs/demo.gif`), gravado com o `apps/web/tools/mock-server.mjs`
 corrigido para falar `conversation.input`/`conversation.confirm`, o protocolo
 atual do Talking. `LICENSE` é MIT, em nome de Émerson Schulze.
 
+**Agents e Skill mostram o que está instalado de verdade, lido do disco.**
+Antes o painel Agents tinha um cartão só (o "Claude Code") e o Skill tinha
+sete — que não são skills, são os GRUPOS DE FERRAMENTA dele (leitura, edição,
+shell…). Quem instalou um plugin com dezesseis agentes e sessenta e seis
+skills não via nenhum deles. Agora `apps/server/src/discovery.ts` varre três
+lugares — os plugins de `~/.claude/plugins/installed_plugins.json`, o
+`.claude` do projeto e o `.claude` pessoal — e lê `agents/<nome>.md` ou
+`agents/<nome>/AGENT.md` e `skills/<nome>/SKILL.md`. O catálogo é reemitido a
+cada troca de projeto, porque plugin de escopo `project` só vale na pasta onde
+foi instalado. Três detalhes que custaram tempo:
+- Os arquivos são do Windows (CRLF). Sem normalizar o CR do fim da linha, o
+  frontmatter não casa (o `.` do regex não pega terminador de linha) e **toda
+  descrição some**.
+- Nem todo agente tem frontmatter — há plugins cujos `AGENT.md` começam direto
+  no `# Agente: x`. Nesse caso a primeira linha de prosa vira a descrição.
+- Quando o Claude delega para um agente que já está no catálogo, quem acende é
+  o cartão dele; só o desconhecido vira subagente novo (`agentForDelegation`,
+  no orquestrador). Idem para a ferramenta `Skill`: ela acende a skill de
+  verdade, não o grupo genérico.
+As duas listas ficaram grandes, então os painéis ganharam um filtro de uma
+linha (`PanelSearch`, em `Panel.tsx`) que aparece sozinho a partir de 8
+agentes / 12 skills.
+
+**O plano pendente mora DENTRO da conversa, não abaixo dela.** Ele era irmão
+do feed no mesmo flex, com `flex: 0 0 auto`: um plano de seis passos não
+cabia, empurrava a caixa de digitar para fora do painel e você ficava vendo
+uma pergunta que não tinha como responder — sem rolagem, sem botão. Agora ele
+é a última bolha do feed e rola junto com o resto; o efeito de auto-scroll
+também reage a `conversation.pending`, então os botões sempre chegam à vista.
+No mesmo caminho, o `.wrap` do Talking trocou `height: 100%` por
+`flex: 1 1 auto` — com `height: 100%` ele media o painel INTEIRO, cabeçalho
+incluso, e sobrava sempre a altura do cabeçalho para fora.
+
+**Confirmar pelo botão também é falar.** Clicar em "Pode ir" mudava o estado
+sem deixar rastro: o plano sumia e a conversa ficava com a pergunta dele e
+nenhuma resposta sua. Agora o clique vira um turno seu ("Pode ir." / "Agora
+não.") na tela e no histórico que o Claude enxerga (`Conversation.note`), e
+recusar tem resposta falada em vez de silêncio. O ensaio
+(`apps/web/tools/mock-server.mjs`) faz igual.
+
+**O sinal de vida não recita comando.** Ele dizia "Ainda nisso. Agora: rodando
+cd c:/repositorio && claude plugin list 2>&1 | head -30" — isso é log de
+terminal, não conversa. Agora fala o TIPO de trabalho ("Ainda dando uma olhada
+no projeto", "Continuo mexendo nos arquivos — te aviso assim que terminar"),
+alternando a frase para não soar gravado. O texto técnico continua no log do
+bloco, que é o lugar dele: `orchestrator.currentAction` alimenta o bloco e o
+novo `currentSkill` alimenta a fala.
+
+**`npm run build` do web voltou a passar — e o navegador continua sem tipos de
+Node.** O `tsc -b` quebrava em `vite.config.ts` (`Cannot find module 'node:url'`,
+`import.meta.url`, `process`): o arquivo é código de Node, mas o `apps/web` não
+tinha `@types/node`. Instalado, com um cuidado: `types: ["node"]` só no
+`tsconfig.node.json` (que compila apenas o `vite.config.ts`) e `types: []` no
+`tsconfig.json` do app. Sem esse `types: []`, o `@types/node` entraria global no
+código do navegador e `setTimeout` passaria a ter duas assinaturas — a do DOM
+(devolve `number`) e a do Node (devolve `NodeJS.Timeout`). Não remova nenhum dos
+dois achando que é sobra. O `npm run typecheck` sempre passou; era só o `build`.
+
 ---
 
 ## Pendências conhecidas
@@ -251,6 +309,7 @@ apps/server/src/
   shell.ts        o PowerShell escondido
   conversation.ts o cérebro do modo conversa (JSON: chat | ask | plan)
   orchestrator.ts traduz eventos do Claude em blocos, logs, setas e artefatos
+  discovery.ts    varre o disco atrás dos agentes e skills instalados
   knowledge.ts    Tree: gravar assunto, ler os dois níveis, recuperar contexto
   auth.ts         estado da credencial e login
   usage.ts        consumo real da conta (5h + semana), via API não-oficial
