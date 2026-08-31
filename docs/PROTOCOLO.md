@@ -22,6 +22,9 @@ Todo evento tem um campo `type`. Fonte da verdade dos tipos: `apps/web/src/types
 | `tree.open` | `{ subjectId }` | pede o nível 2 (stack daquele assunto) |
 | `knowledge.save` | `{}` | grava a análise atual como assunto reutilizável |
 | `knowledge.forget` | `{ subjectId }` | apaga um assunto |
+| `mcp.check` | `{}` | revarre os servidores MCP (`claude mcp list`) |
+| `mcp.login` | `{ server, mode?: 'shell' \| 'window' }` | roda `claude mcp login "<server>"`. `shell` (padrão) usa o PowerShell que já está aberto e transmite a saída; `window` abre um terminal visível |
+| `mcp.dismiss` | `{}` | você fechou o aviso de servidor bloqueado; limpa `blocked` |
 | `ping` | `{}` | keepalive; servidor responde `pong` |
 
 ## Servidor → Cliente (`ServerEvent`)
@@ -98,6 +101,38 @@ incrementa `hits`, que aparece no tamanho e na cor do nó.
   `conversation.input`), usadas para desenhar as miniaturas na bolha.
 - `conversation.say` — `{ text }` **o que deve ser falado em voz alta**.
 - `voice.health` — `{ stt, tts, wakeWord }` quais serviços locais estão de pé.
+
+`turn` e `say` carregam textos DIFERENTES quando o agente responde em prosa: o
+`turn` vai inteiro (é o que fica escrito e legível) e o `say` é a versão curta,
+sem marcação e cortada numa fronteira de frase (é o que a voz lê). Eram o mesmo
+texto até a resposta escrita começar a aparecer picotada no meio da palavra — a
+tela herdava um limite que só existia por causa do som.
+
+### MCP (servidores conectados ao Claude Code)
+- `mcp.state` — `{ servers, checkedAt, checking, reachable, permissionMode, blocked }`
+  quem está configurado e se dá para usar.
+- `mcp.login.line` — `{ server, line }` a saída do login, ao vivo.
+- `mcp.login.done` — `{ server, ok, urls }` fim do login e os endereços de
+  autorização que apareceram.
+
+Duas coisas diferentes derrubam uma ferramenta de MCP, e o protocolo separa as
+duas porque o conserto não é o mesmo:
+
+1. **Sem credencial** — o servidor vem com `status: 'needs-auth'`. Resolve com
+   `mcp.login`, que é OAuth e abre o navegador. Depois de aprovar, o servidor
+   reabre o processo do Claude sozinho: sem isso a credencial nova só valeria na
+   próxima vez que ele subisse.
+2. **Sem permissão** — `reachable: false`. O processo roda em modo não
+   interativo, e um `--permission-mode` como `acceptEdits` NÃO alcança ferramenta
+   de MCP: o servidor aparece conectado, a ferramenta existe, e toda chamada
+   volta `permission_denied`. Aqui login nenhum resolve — só o modo. Medido no
+   CLI 2.1.251: nem `--allowedTools mcp__servidor`, nem o nome completo da
+   ferramenta, nem `permissions.allow` no `--settings` mudam isso. Modos que
+   alcançam: `auto` (padrão nosso) e `bypassPermissions`.
+
+`blocked` conta que uma ferramenta acabou de ser barrada, com o motivo já
+classificado — é o que faz o popup abrir sozinho no momento em que resolve
+alguma coisa, em vez de a cada resposta.
 
 Duas regras que valem mais que o resto:
 

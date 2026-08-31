@@ -13,6 +13,16 @@ export interface Reply {
   mode: ConversationMode;
   /** O que será falado em voz alta. Curto de propósito. */
   say: string;
+  /**
+   * A resposta INTEIRA, para ler na tela.
+   *
+   * Só aparece quando ela é maior do que a fala — ou seja, quando o agente
+   * respondeu em prosa em vez do JSON combinado. Existe porque as duas coisas
+   * têm limites opostos: voz quer duas frases, leitura quer a resposta toda.
+   * Enquanto era um campo só, a resposta escrita saía picotada no meio da
+   * palavra, e o que o Talking mostrava simplesmente não era o que ele disse.
+   */
+  text?: string;
   plan?: Plan;
 }
 
@@ -84,10 +94,16 @@ export class Conversation {
     const isFirst = this.history.length === 1;
     const prompt = isFirst ? `${FRAME}\n\nO desenvolvedor disse: "${text}"` : `O desenvolvedor disse: "${text}"`;
 
-    const answer = await this.claude.ask(prompt, 120_000, images);
+    // 4 minutos SEM SINAL DE VIDA, não 4 minutos de trabalho: cada arquivo lido
+    // renova o prazo. O limite antigo era de duração total e derrubava análise
+    // de repositório grande no meio, dizendo que o agente demorou demais quando
+    // ele estava trabalhando.
+    const answer = await this.claude.ask(prompt, 240_000, images);
     const reply = parseReply(answer);
 
-    this.history.push({ role: 'agent', text: reply.say });
+    // O que ele lembra é o que ele DISSE por inteiro, não o resumo falado:
+    // guardar a versão curta apagava metade da própria resposta do contexto.
+    this.history.push({ role: 'agent', text: reply.text ?? reply.say });
     this.pending = reply.mode === 'plan' ? (reply.plan ?? null) : null;
     return reply;
   }
@@ -112,13 +128,16 @@ export class Conversation {
  * Nos dois casos a conversa tem que continuar — nunca travar por formato.
  */
 export function parseReply(raw: string): Reply {
-  const cleaned = raw.replace(/```(?:json)?/gi, '').trim();
-  const start = cleaned.indexOf('{');
-  const end = cleaned.lastIndexOf('}');
+  // Tirar as cercas de código só faz sentido enquanto caçamos o JSON. Fazer
+  // isso no texto que vai para a tela estraga qualquer resposta que traga um
+  // bloco de código — e prosa com código é justamente o plano B aqui embaixo.
+  const unfenced = raw.replace(/```(?:json)?/gi, '').trim();
+  const start = unfenced.indexOf('{');
+  const end = unfenced.lastIndexOf('}');
 
   if (start >= 0 && end > start) {
     try {
-      const parsed = JSON.parse(cleaned.slice(start, end + 1)) as Partial<Reply>;
+      const parsed = JSON.parse(unfenced.slice(start, end + 1)) as Partial<Reply>;
       if (parsed.say) {
         const mode: ConversationMode =
           parsed.mode === 'ask' || parsed.mode === 'plan' ? parsed.mode : 'chat';
@@ -133,9 +152,48 @@ export function parseReply(raw: string): Reply {
     }
   }
 
-  // Plano B: trata como conversa e fala as primeiras frases.
-  const spoken = cleaned.replace(/\s+/g, ' ').trim().slice(0, 320);
-  return { mode: 'chat', say: spoken || 'Desculpa, não consegui formular a resposta.' };
+  /*
+   * Plano B: ele respondeu em prosa.
+   *
+   * A prosa vai INTEIRA para a tela; o corte em 320 caracteres serve só para a
+   * voz, que não pode ler três parágrafos. Eram a mesma coisa antes, e o
+   * resultado era a resposta escrita terminando no meio de uma frase — o texto
+   * existia, mas ninguém conseguia ler o final.
+   */
+  const prose = raw.trim();
+  if (!prose) return { mode: 'chat', say: 'Desculpa, não consegui formular a resposta.' };
+
+  const spoken = speakable(prose);
+  return { mode: 'chat', say: spoken, text: prose === spoken ? undefined : prose };
+}
+
+/** Limite de fala: uma frase inteira, nunca uma palavra pela metade. */
+const SPOKEN_LIMIT = 320;
+
+/**
+ * A versão falável de uma resposta escrita.
+ *
+ * Marcação não se lê em voz alta ("asterisco asterisco bloqueada") e frase
+ * cortada no meio soa como pane, então cortamos na última pontuação que couber
+ * e só recuamos para o espaço quando não há nenhuma.
+ */
+export function speakable(prose: string): string {
+  const flat = prose
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/\*\*([^*]*)\*\*/g, '$1')
+    .replace(/(^|\s)[*_]([^*_]+)[*_](?=\s|$)/g, '$1$2')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (flat.length <= SPOKEN_LIMIT) return flat;
+
+  const head = flat.slice(0, SPOKEN_LIMIT);
+  const sentence = Math.max(head.lastIndexOf('. '), head.lastIndexOf('! '), head.lastIndexOf('? '));
+  if (sentence > SPOKEN_LIMIT / 2) return head.slice(0, sentence + 1);
+  const space = head.lastIndexOf(' ');
+  return `${(space > 0 ? head.slice(0, space) : head).trim()}…`;
 }
 
 function normalizePlan(plan: Plan | undefined): Plan | undefined {

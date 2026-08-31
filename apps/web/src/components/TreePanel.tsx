@@ -39,6 +39,14 @@ const STATUS_MESSAGE: Record<string, string> = {
   connecting: 'procurando o banco…',
   unreachable:
     'o Postgres não respondeu. Suba com “docker compose up -d” — o Tree acende sozinho em até 10s, sem reiniciar nada.',
+  /*
+   * Este é o caso em que o `docker compose up -d` NÃO resolve — e dizer que
+   * resolve manda a pessoa rodar em círculos: o container está saudável, o
+   * `netstat` mostra a porta escutando, e mesmo assim toda conexão morre. Quem
+   * está escutando é um relay órfão da WSL, que aceita e não encaminha.
+   */
+  'relay-broken':
+    'o Postgres está de pé, mas o encaminhamento de porta da WSL quebrou: alguém atende na 5433 e derruba a conexão. Subir o container de novo não resolve. No PowerShell: “wsl --shutdown”, reabra a WSL e rode “docker compose up -d”.',
   'schema-missing':
     'o banco está de pé, mas foi criado antes do Tree de dois níveis. Aplique a migração:\ndocker exec -i ia_coder_postgres psql -U iacoder -d iacoder < db/migrations/001_tree_dois_niveis.sql',
 };

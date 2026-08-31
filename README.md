@@ -26,6 +26,7 @@ IA_Coder/
 │   │       ├── discovery.ts    # varre o disco: agentes e skills instalados
 │   │       ├── conversation.ts # o "Talking": chat → plano → confirmação
 │   │       ├── claude.ts       # processo `claude` persistente (stream-json)
+│   │       ├── mcp.ts          # servidores MCP: quem está de pé, quem precisa de login
 │   │       ├── usage.ts        # consumo real da conta (janela de 5h + limite semanal)
 │   │       └── protocol.ts     # tipos dos eventos WebSocket (fonte da verdade)
 │   └── web/                # frontend (React + TypeScript + Vite + CSS Modules)
@@ -75,6 +76,20 @@ IA_Coder/
    durante a execução acende no próprio cartão.
 7. **O painel Status mostra o consumo real da sua conta** Claude (janela de 5 horas e
    limite semanal), não um contador por sessão.
+8. **Os servidores MCP que você já usa no Claude Code valem aqui também.** O chip
+   `MCP` na barra de cima mostra quantos estão de pé; clicando, você vê a lista e
+   entra nos que pedem credencial — o `claude mcp login` roda no PowerShell que já
+   está aberto, o endereço de autorização aparece clicável no próprio popup, e
+   depois de aprovar o agente reinicia sozinho já enxergando as ferramentas. Se
+   uma ferramenta for barrada no meio de uma resposta, o popup abre sozinho
+   apontando o servidor que faltou.
+
+   > O agente roda em modo não interativo, onde não existe prompt de permissão.
+   > Por isso o padrão é `CLAUDE_PERMISSION_MODE=auto`: `acceptEdits` libera
+   > edição de arquivo e **não** libera ferramenta de MCP — o servidor aparece
+   > conectado e toda chamada volta "bloqueada". Se o seu `.env` fixar
+   > `acceptEdits`, o popup avisa em vez de deixar você tentando logar num
+   > servidor onde já está dentro.
 
 Todo o contrato de eventos entre a interface e o servidor está documentado em
 [docs/PROTOCOLO.md](docs/PROTOCOLO.md); o frontend **não inventa dado nenhum** — tudo que

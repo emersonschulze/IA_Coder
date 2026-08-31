@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { config } from './config.js';
+import { killTree } from './proctree.js';
 import type { ImageAttachment } from './protocol.js';
 
 export type ClaudeStatus = 'stopped' | 'starting' | 'ready' | 'thinking' | 'error';
@@ -9,6 +10,31 @@ export interface ToolUse {
   id: string;
   name: string;
   input: Record<string, unknown>;
+  /**
+   * O `Task` de quem este evento é filho — `null` no fluxo do agente principal.
+   *
+   * É o único jeito de saber de QUEM é o trabalho quando vários subagentes
+   * correm em paralelo: o stream é um só, e sem este campo tudo o que os quatro
+   * fizerem parece ter vindo do mesmo lugar.
+   */
+  parentToolUseId: string | null;
+}
+
+/** O que uma ferramenta devolveu. */
+export interface ToolResult {
+  /** O id do `tool_use` que está sendo respondido. */
+  id: string;
+  isError: boolean;
+  text: string;
+  /** O `Task` de quem este resultado é filho — veja `ToolUse.parentToolUseId`. */
+  parentToolUseId: string | null;
+}
+
+/** Uma ferramenta que o agente pediu e o modo de permissão recusou. */
+export interface ToolDenied {
+  /** Nome completo — para MCP, `mcp__<servidor>__<ferramenta>`. */
+  tool: string;
+  message: string;
 }
 
 export interface TurnResult {
@@ -58,6 +84,17 @@ function spawnClaude(cwd: string, args: string[]): ChildProcessWithoutNullStream
 export class ClaudeSession extends EventEmitter {
   private child: ChildProcessWithoutNullStreams | null = null;
   private buffer = '';
+
+  /** Um turno de `ask` em andamento. Dois ao mesmo tempo embaralham respostas. */
+  private busy = false;
+  /**
+   * Como desistir do `ask` em curso quando o processo morre debaixo dele.
+   *
+   * Sem isto, abortar deixava a promessa pendurada para sempre: ninguém mais ia
+   * emitir `result`, o `converse` ficava esperando, e o Talking continuava
+   * "pensando" até o fim da sessão.
+   */
+  private abortAsk: ((reason: Error) => void) | null = null;
 
   status: ClaudeStatus = 'stopped';
   cwd: string;
@@ -111,12 +148,26 @@ export class ClaudeSession extends EventEmitter {
     this.setStatus('ready');
   }
 
-  stop(): void {
-    this.child?.stdin.end();
-    this.child?.kill();
+  /**
+   * @param motivo aparece no erro de quem estava esperando uma resposta.
+   */
+  stop(motivo = 'o agente foi encerrado'): void {
+    try {
+      this.child?.stdin.end();
+    } catch {
+      /* stdin já fechado */
+    }
+    // Árvore inteira: no Windows o `claude` roda dentro de um `cmd.exe`, e
+    // matar só o `cmd` deixa o agente vivo trabalhando às escuras.
+    killTree(this.child);
     this.child = null;
     this.buffer = '';
     this.sessionId = null;
+    this.busy = false;
+    // Quem estava esperando precisa saber agora, não daqui a quatro minutos.
+    const desistir = this.abortAsk;
+    this.abortAsk = null;
+    desistir?.(new Error(motivo));
     if (this.status !== 'error') this.setStatus('stopped');
   }
 
@@ -143,30 +194,66 @@ export class ClaudeSession extends EventEmitter {
    * Faz uma pergunta e devolve o texto da resposta. Usado para tarefas internas
    * (extrair o assunto para o Tree, por exemplo) e para o modo conversa — não
    * é execução de verdade.
+   *
+   * O tempo limite é de OCIOSIDADE, não de duração total: cada ferramenta usada e
+   * cada texto escrito zeram o relógio. Limite total está errado aqui porque o
+   * agente tem permissão para ler e investigar antes de responder — pedir a
+   * análise de um repositório grande passa fácil de dois minutos de trabalho
+   * legítimo, e desistir no meio dava "o agente demorou demais para responder"
+   * enquanto ele estava, de fato, trabalhando.
    */
-  ask(text: string, timeoutMs = 180_000, images?: ImageAttachment[]): Promise<string> {
+  ask(text: string, idleMs = 180_000, images?: ImageAttachment[]): Promise<string> {
+    if (this.busy) {
+      return Promise.reject(new Error('ainda estou terminando o pedido anterior'));
+    }
+
     return new Promise((resolve, reject) => {
       const parts: string[] = [];
-      const onText = (chunk: string) => parts.push(chunk);
+      let timer: NodeJS.Timeout;
+
+      const desistir = (): void => {
+        // O turno continua rodando lá dentro: só paramos de esperar. Manter
+        // `busy` é o que impede a resposta atrasada de resolver a PRÓXIMA
+        // pergunta — era o pior efeito do limite antigo, porque as respostas
+        // trocavam de lugar sem ninguém perceber.
+        cleanup();
+        this.once('result', () => { this.busy = false; });
+        reject(new Error('o agente parou de dar sinal de vida'));
+      };
+
+      const adiar = (): void => {
+        clearTimeout(timer);
+        timer = setTimeout(desistir, idleMs);
+      };
+
+      const onText = (chunk: string): void => { parts.push(chunk); adiar(); };
+      const onTool = (): void => adiar();
       const finish = (): void => {
         cleanup();
+        this.busy = false;
         resolve(parts.join('\n').trim());
       };
       const cleanup = (): void => {
         clearTimeout(timer);
+        this.abortAsk = null;
         this.off('text', onText);
+        this.off('tool', onTool);
         this.off('result', finish);
       };
-      const timer = setTimeout(() => {
-        cleanup();
-        reject(new Error('o agente demorou demais para responder'));
-      }, timeoutMs);
 
+      // O `stop()` chama isto para não deixar ninguém esperando um turno que
+      // não vai mais acontecer.
+      this.abortAsk = (reason) => { cleanup(); reject(reason); };
+
+      timer = setTimeout(desistir, idleMs);
       this.on('text', onText);
+      this.on('tool', onTool);
       this.once('result', finish);
 
+      this.busy = true;
       if (!this.send(text, images)) {
         cleanup();
+        this.busy = false;
         reject(new Error('o Claude não está de pé'));
       }
     });
@@ -195,6 +282,22 @@ export class ClaudeSession extends EventEmitter {
           this.model = event.model ?? null;
           this.emit('init', { sessionId: this.sessionId, cwd: event.cwd, model: this.model });
         }
+        /*
+         * Uma ferramenta barrada por permissão.
+         *
+         * Em modo -p não existe prompt: o CLI anuncia a negação por aqui e a
+         * conversa segue como se nada tivesse acontecido, com o agente
+         * explicando em prosa que "foi bloqueada". Sem escutar este evento, a
+         * ferramenta não tem como saber a diferença entre "o servidor MCP não
+         * respondeu" e "o servidor respondeu, mas o processo não tinha
+         * permissão de chamar" — e a segunda tem conserto de um clique.
+         */
+        if (event.subtype === 'permission_denied' && event.tool_name) {
+          this.emit('denied', {
+            tool: String(event.tool_name),
+            message: String(event.message ?? ''),
+          } satisfies ToolDenied);
+        }
         break;
 
       case 'assistant': {
@@ -208,6 +311,7 @@ export class ClaudeSession extends EventEmitter {
               id: block.id,
               name: block.name,
               input: block.input ?? {},
+              parentToolUseId: event.parent_tool_use_id ?? null,
             } satisfies ToolUse);
           }
         });
@@ -223,7 +327,8 @@ export class ClaudeSession extends EventEmitter {
               id: block.tool_use_id,
               isError: Boolean(block.is_error),
               text: typeof block.content === 'string' ? block.content : '',
-            });
+              parentToolUseId: event.parent_tool_use_id ?? null,
+            } satisfies ToolResult);
           }
         });
         break;

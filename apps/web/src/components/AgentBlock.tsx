@@ -1,6 +1,6 @@
-import { useEffect, useRef, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useAnchor } from '@/anchors/AnchorContext';
-import { hhmmss, initialsOf, pct } from '@/lib/format';
+import { duration, hhmmss, initialsOf, pct } from '@/lib/format';
 import type { Agent, Block, Skill } from '@/types/domain';
 import styles from './Working.module.css';
 
@@ -16,7 +16,11 @@ const STATE_LABEL: Record<Block['state'], string> = {
   running: 'executando',
   done: 'concluído',
   error: 'erro',
+  cancelled: 'interrompido',
 };
+
+/** Passou disto sem uma linha nova, a tela para de fingir que está tudo bem. */
+const QUIETO_MS = 45_000;
 
 const LOG_CLASS = {
   info: '',
@@ -32,6 +36,31 @@ export function AgentBlock({ block, agent, skill, position }: Props) {
   const color = agent?.color ?? '#22d3ee';
   const active = block.state === 'running';
 
+  /*
+   * Quanto tempo este bloco está nisso.
+   *
+   * Uma delegação longa — o subagente lendo um serviço inteiro — fica minutos
+   * na mesma linha de ação, e sem um relógio correndo isso é indistinguível de
+   * travamento. O início vem da primeira linha de log, que é escrita quando ele
+   * começa a trabalhar de verdade.
+   */
+  const desde = block.logs[0]?.ts;
+  /*
+   * Há quanto tempo ele não dá sinal.
+   *
+   * O tempo total diz "faz 10 minutos que começou", o que não distingue um
+   * comando demorado de um processo morto. O que responde essa pergunta é o
+   * silêncio: se a última linha de log tem seis minutos, algo está errado, e a
+   * tela precisa dizer isso em vez de fingir normalidade.
+   */
+  const ultimo = block.logs[block.logs.length - 1]?.ts;
+  const [agora, setAgora] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    const tique = window.setInterval(() => setAgora(Date.now()), 1000);
+    return () => window.clearInterval(tique);
+  }, [active]);
+
   // O log acompanha a última linha, mas só se o usuário não subiu a rolagem.
   useEffect(() => {
     const node = logRef.current;
@@ -45,6 +74,7 @@ export function AgentBlock({ block, agent, skill, position }: Props) {
     'dimmable',
     active ? `${styles.blockActive} spotlight` : '',
     block.state === 'done' ? styles.blockDone : '',
+    block.state === 'cancelled' ? styles.blockCancelled : '',
   ]
     .filter(Boolean)
     .join(' ');
@@ -56,18 +86,29 @@ export function AgentBlock({ block, agent, skill, position }: Props) {
       <header className={styles.blockHead}>
         <div className={styles.blockAvatar}>{initialsOf(agent?.name ?? '??', agent?.initials)}</div>
         <div className={styles.blockTitle}>
-          Agent {position} · {agent?.name ?? block.agentId}
+          {position}. {agent?.name ?? block.agentId}
           <small className={styles.blockAction}>{block.action || 'aguardando alocação…'}</small>
         </div>
         <div className={styles.blockState}>
           <i className={styles.stateLed} />
           <span>{STATE_LABEL[block.state]}</span>
+          {active && desde !== undefined && (() => {
+            const parado = ultimo === undefined ? 0 : agora - ultimo;
+            const quieto = parado > QUIETO_MS;
+            return (
+              <span className={quieto ? styles.blockStalled : styles.blockElapsed}>
+                {quieto
+                  ? `sem sinal há ${duration(parado / 1000)}`
+                  : duration((agora - desde) / 1000)}
+              </span>
+            );
+          })()}
         </div>
       </header>
 
       <div className={styles.skillPill}>
         <i className={styles.diamond} />
-        <span>{skill ? `skill: ${skill.name} — ${skill.detail.toLowerCase()}` : 'skill não atribuída'}</span>
+        <span>{skill ? `skill: ${skill.name} — ${skill.detail.toLowerCase()}` : 'sem skill no momento'}</span>
       </div>
 
       {block.logs.length > 0 && (

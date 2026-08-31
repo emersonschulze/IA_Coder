@@ -14,10 +14,21 @@ export const SKILLS: Skill[] = [
   { id: 'edit',   name: 'Edição',     detail: 'EDIT · WRITE',         initials: 'ED', color: '#22d3ee', inUse: false, kind: 'tool' },
   { id: 'shell',  name: 'Shell',      detail: 'BASH · POWERSHELL',    initials: 'SH', color: '#fbbf24', inUse: false, kind: 'tool' },
   { id: 'web',    name: 'Web',        detail: 'SEARCH · FETCH',       initials: 'WB', color: '#a855f7', inUse: false, kind: 'tool' },
-  { id: 'task',   name: 'Subagente',  detail: 'TASK · DELEGAÇÃO',     initials: 'TK', color: '#f472b6', inUse: false, kind: 'tool' },
   { id: 'notes',  name: 'Plano',      detail: 'TODO · NOTAS',         initials: 'PL', color: '#34d399', inUse: false, kind: 'tool' },
   { id: 'other',  name: 'Outras',     detail: 'DEMAIS FERRAMENTAS',   initials: 'OT', color: '#94a3b8', inUse: false, kind: 'tool' },
 ];
+
+/**
+ * Os nomes que a ferramenta de delegação já teve.
+ *
+ * Este Claude Code chama de `Agent`; versões anteriores chamavam de `Task`.
+ * Reconhecer só um dos dois é o bastante para o subagente nunca aparecer na
+ * tela: a delegação passa batida e todo o trabalho dele fica creditado ao
+ * agente principal.
+ */
+export const DELEGATION_TOOLS = new Set(['Agent', 'Task']);
+
+export const isDelegation = (tool: string): boolean => DELEGATION_TOOLS.has(tool);
 
 const TOOL_TO_SKILL: Record<string, string> = {
   Read: 'read', Glob: 'read', Grep: 'read', NotebookRead: 'read',
@@ -29,6 +40,73 @@ const TOOL_TO_SKILL: Record<string, string> = {
 };
 
 export const skillForTool = (tool: string): string => TOOL_TO_SKILL[tool] ?? 'other';
+
+/**
+ * Qual CARTÃO do painel Skill esta ferramenta acende — se é que acende algum.
+ *
+ * Delegar não é uma habilidade. `Task` responde "quem faz", não "o que está
+ * sendo feito", e isso a tela já conta melhor em outro lugar: o bloco do
+ * principal diz por quem ele espera e cada subagente ganha o cartão dele. Como
+ * cartão de skill, "Subagente" só fazia barulho — acendia em toda delegação e
+ * era o único aceso enquanto quatro especialistas trabalhavam, escondendo
+ * justamente o que cada um deles estava fazendo.
+ *
+ * `skillForTool` continua devolvendo `task`: a narração falada usa esse grupo
+ * para dizer "o subagente está nisso", e ali a informação é útil.
+ */
+export const skillCardForTool = (tool: string): string | null => {
+  const group = skillForTool(tool);
+  return group === 'task' ? null : group;
+};
+
+/**
+ * A skill que este caminho representa, se ele estiver dentro da pasta de alguma.
+ *
+ * @param dirs pasta em disco (minúscula, separador normalizado) → id da skill
+ */
+export function skillFromPath(path: string, dirs: Map<string, string>): string | null {
+  const alvo = normalizeDir(path);
+  for (const [dir, id] of dirs) {
+    if (alvo === dir || alvo.startsWith(`${dir}/`)) return id;
+  }
+  return null;
+}
+
+/**
+ * `skills/<pasta>/SKILL.md` dentro de um texto qualquer — caminho ou comando.
+ *
+ * Duas coisas que o casamento por caminho absoluto não resolve, e as duas
+ * aconteceram na prática:
+ *
+ * 1. **A mesma skill mora em dois lugares.** A descoberta indexa o cache do
+ *    plugin (`~/.claude/plugins/cache/junto-agents/…/skills/planejar-e2e`), mas
+ *    o agente abre o repo-fonte (`C:/Repositorio/JuntoAgents/skills/planejar-e2e`)
+ *    — é a mesma skill em duas cópias, e comparar caminho absoluto nunca casa.
+ * 2. **Nem toda leitura passa pela ferramenta `Read`.** O agente faz
+ *    `cat ".../SKILL.md"` pelo Bash, e aí o que existe é uma linha de comando,
+ *    não um `file_path`.
+ *
+ * Exigir o `SKILL.md` no fim é o que segura o falso positivo: `ls skills/` ou um
+ * grep que só cita o nome da skill não casam. Referenciar aquele arquivo é
+ * referenciar a skill.
+ */
+export function skillFromText(text: string, byFolder: Map<string, string>): string | null {
+  if (!text) return null;
+  const pattern = /skills[/\\]([^/\\\s"']+)[/\\]skill\.md/gi;
+  for (const match of text.toLowerCase().matchAll(pattern)) {
+    const found = byFolder.get(match[1]);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** A última pasta de um caminho: `.../skills/planejar-e2e` → `planejar-e2e`. */
+export const folderOf = (dir: string): string =>
+  normalizeDir(dir).split('/').filter(Boolean).pop() ?? '';
+
+/** Mesma normalização dos dois lados da comparação, senão nada casa no Windows. */
+export const normalizeDir = (dir: string): string =>
+  dir.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
 
 export const MAIN_AGENT: Agent = {
   id: 'claude',
@@ -55,8 +133,18 @@ export function subAgent(kind: string, index: number): Agent {
 
 /* ---------------------------------------------- o que está instalado aqui -- */
 
-/** Cor estável por nome: o mesmo agente tem a mesma cor em toda sessão. */
+/** Cor estável por nome: a mesma skill tem a mesma cor em toda sessão. */
 const PALETTE = ['#22d3ee', '#a855f7', '#34d399', '#fbbf24', '#f472b6', '#38bdf8', '#fb923c', '#c084fc'];
+
+/**
+ * Cores dos agentes instalados.
+ *
+ * O ciano fica de fora: é do agente principal, e dois cartões da mesma cor
+ * tornam impossível dizer de quem é a seta quando eles trabalham em paralelo.
+ * E a distribuição é por ÍNDICE, não por hash do nome: hash colide à toa — era
+ * o que fazia "arquiteto" nascer idêntico ao "Claude Code".
+ */
+const AGENT_PALETTE = ['#a855f7', '#34d399', '#fbbf24', '#f472b6', '#fb923c', '#c084fc', '#60a5fa', '#f87171'];
 
 function colorFor(seed: string): string {
   let hash = 0;
@@ -77,13 +165,13 @@ function initialsFor(name: string): string {
  * Ele nasce ocioso: só acende quando o Claude delega de verdade para ele — o
  * painel mostra quem existe, a execução mostra quem está trabalhando.
  */
-export function installedAgent(entry: CatalogEntry): Agent {
+export function installedAgent(entry: CatalogEntry, index = 0): Agent {
   return {
     id: entry.id,
     name: entry.name,
     role: entry.source.toUpperCase(),
     initials: initialsFor(entry.name),
-    color: colorFor(entry.name),
+    color: AGENT_PALETTE[index % AGENT_PALETTE.length],
     state: 'idle',
     source: entry.source,
   };
@@ -127,7 +215,8 @@ export function describeTool(tool: string, input: Record<string, unknown>): stri
     case 'Bash': return `Rodando ${truncate(String(input.command ?? ''), 60)}`;
     case 'WebSearch': return `Pesquisando "${truncate(String(input.query ?? ''), 40)}"`;
     case 'WebFetch': return `Abrindo ${truncate(String(input.url ?? ''), 50)}`;
-    case 'Task': return `Delegando para ${bareName(String(input.subagent_type ?? 'subagente'))}`;
+    case 'Task':
+    case 'Agent': return `Delegando para ${bareName(String(input.subagent_type ?? 'subagente'))}`;
     case 'Skill': return `Usando a skill ${bareName(String(input.skill ?? input.name ?? ''))}`.trim();
     case 'TodoWrite': return 'Atualizando o plano';
     default: return tool;

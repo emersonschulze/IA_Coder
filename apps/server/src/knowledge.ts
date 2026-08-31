@@ -119,14 +119,18 @@ async function readSubjectDetail(subjectId: string): Promise<SubjectDetail | nul
 export async function saveSubject(
   extracted: ExtractedSubject,
   meta: { projectPath: string; persona?: string },
-): Promise<{ id: string; title: string } | null> {
+): Promise<{ id: string; title: string; created: boolean } | null> {
   if (!dbReady()) return null;
 
   const slug = slugify(extracted.slug || extracted.title);
   const content = [extracted.title, extracted.summary, (extracted.tags ?? []).join(' ')].join('\n');
   const vector = await embed(content);
 
-  const [subject] = await query<{ id: string; title: string }>(`
+  // `xmax = 0` distingue linha inserida de linha atualizada num upsert. Sem
+  // isso não dá para dizer "guardei" ou "atualizei" — e são coisas diferentes
+  // para quem olha: uma cria assunto novo, a outra reescreve um que já valia,
+  // junto com a stack inteira dele.
+  const [subject] = await query<{ id: string; title: string; created: boolean }>(`
     INSERT INTO subjects (slug, title, summary, persona, project_path, tags, content, embedding)
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
     ON CONFLICT (slug) DO UPDATE SET
@@ -135,7 +139,7 @@ export async function saveSubject(
       tags = EXCLUDED.tags,
       content = EXCLUDED.content,
       embedding = COALESCE(EXCLUDED.embedding, subjects.embedding)
-    RETURNING id, title
+    RETURNING id, title, (xmax = 0) AS created
   `, [
     slug, extracted.title.trim(), extracted.summary.trim(),
     meta.persona ?? null, meta.projectPath, extracted.tags ?? [],
@@ -207,7 +211,13 @@ export async function recall(prompt: string, k = 3): Promise<Recall[]> {
     ? await query<Recall>(`SELECT * FROM subject_search($1::vector, $2)`, [toVector(vector), k])
     : await query<Recall>(`SELECT * FROM subject_search_text($1, $2)`, [prompt, k]);
 
-  const useful = rows.filter((row) => row.similarity > (vector ? 0.45 : 0.15));
+  /*
+   * O corte da busca por TEXTO era 0.15 — frouxo a ponto de casar assunto que
+   * só divide um par de palavras com o pedido. E um assunto errado aqui não é
+   * inofensivo: ele entra no prompt como "conhecimento já confirmado", e o
+   * agente parte de uma premissa que não vale para a tarefa da vez.
+   */
+  const useful = rows.filter((row) => row.similarity > (vector ? 0.45 : 0.35));
   if (useful.length > 0) {
     await query(`UPDATE subjects SET hits = hits + 1 WHERE id = ANY($1::uuid[])`,
       [useful.map((row) => row.id)]);
@@ -221,10 +231,23 @@ export function recallBlock(items: Recall[]): string {
   const body = items
     .map((item) => `- **${item.title}**: ${item.summary}`)
     .join('\n');
+  /*
+   * "NÃO reinvestigue o que já está aqui" saía caro demais.
+   *
+   * A busca traz o assunto MAIS PARECIDO, não necessariamente um que se aplique
+   * — e uma proibição categórica em cima de um resumo só de perto relacionado
+   * dava ao agente licença para concluir que já sabia e encerrar o turno sem
+   * fazer a tarefa. Economizar leitura é o objetivo; pular a tarefa não é.
+   */
   return [
     '<contexto-do-tree>',
-    'Conhecimento já confirmado neste projeto. Use como ponto de partida e NÃO reinvestigue o que já está aqui:',
+    'Conhecimento já confirmado neste projeto, de análises anteriores:',
     body,
+    '',
+    'Use como ponto de partida para não redescobrir o que já está aqui. Mas isto é',
+    'contexto, não resposta: se não cobrir o que foi pedido agora, investigue o que',
+    'faltar e execute a tarefa mesmo assim. Nunca encerre o turno alegando que já',
+    'sabia — se algo aqui estiver desatualizado ou não se aplicar, diga isso e siga.',
     '</contexto-do-tree>',
     '',
   ].join('\n');

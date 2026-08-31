@@ -7,7 +7,22 @@ export type DbState =
   | 'connecting'      // tentando pela primeira vez
   | 'ok'              // conectado e com o esquema certo
   | 'unreachable'     // ninguém atendeu no endereço
+  | 'relay-broken'    // alguém atendeu e derrubou: túnel da WSL velho
   | 'schema-missing'; // banco de pé, mas sem as tabelas do Tree
+
+/**
+ * "Não respondeu" e "atendeu e desligou na sua cara" são falhas diferentes, com
+ * curas diferentes — e mandar `docker compose up -d` para a segunda faz você
+ * rodar em círculos, porque o container está de pé e saudável.
+ *
+ * ECONNRESET/EPIPE aqui é a assinatura de um `wslrelay.exe` órfão no Windows: o
+ * Docker roda dentro da WSL, o Windows encaminha a porta por um relay, e quando
+ * os containers são recriados sem derrubar a WSL o relay antigo continua
+ * escutando 5433. Ele aceita a conexão TCP — por isso `netstat` jura que a
+ * porta está viva — e reseta no primeiro byte, porque não tem para onde
+ * encaminhar. De dentro da WSL o mesmo banco responde normalmente.
+ */
+const RELAY_CODES = new Set(['ECONNRESET', 'EPIPE']);
 
 let pool: pg.Pool | null = null;
 let state: DbState = 'connecting';
@@ -57,11 +72,21 @@ async function attempt(): Promise<DbState> {
     return state;
   } catch (error) {
     const message = (error as Error).message;
-    if (state !== 'unreachable') {
-      console.warn(`[db] não respondeu em ${mask(url)} (via ${source}): ${message}`);
-      console.warn('[db] Tree desativado. Vou continuar tentando a cada 10s — não precisa reiniciar.');
+    const code = (error as NodeJS.ErrnoException).code ?? '';
+    const relay = RELAY_CODES.has(code);
+    const next: DbState = relay ? 'relay-broken' : 'unreachable';
+
+    if (state !== next) {
+      if (relay) {
+        console.warn(`[db] ${mask(url)} aceitou a conexão e derrubou (${code}).`);
+        console.warn('[db] O container está de pé — quem quebrou foi o encaminhamento de porta da WSL.');
+        console.warn('[db] Conserto: no PowerShell, `wsl --shutdown`; depois reabra a WSL e `docker compose up -d`.');
+      } else {
+        console.warn(`[db] não respondeu em ${mask(url)} (via ${source}): ${message}`);
+        console.warn('[db] Tree desativado. Vou continuar tentando a cada 10s — não precisa reiniciar.');
+      }
     }
-    setState('unreachable');
+    setState(next);
     return state;
   }
 }

@@ -3,6 +3,7 @@ import { useVoiceLoop } from '@/hooks/useVoiceLoop';
 import { useVoiceOut } from '@/hooks/useVoiceOut';
 import { useSession } from '@/store/useSession';
 import type { ImageAttachment } from '@/types/domain';
+import { BubbleText } from './BubbleText';
 import { Panel } from './Panel';
 import styles from './ConversationPanel.module.css';
 
@@ -10,6 +11,8 @@ interface Props {
   onInput: (text: string, images?: ImageAttachment[]) => void;
   onConfirm: (accept: boolean) => void;
   onSaveKnowledge: () => void;
+  /** Recusa guardar esta análise — o convite some e nada vai para o banco. */
+  onDiscardKnowledge: () => void;
   /** Abre o arquivo gerado com o programa padrão do Windows. */
   onOpenArtifact: (path: string, reveal?: boolean) => void;
   /** O botão 🔊 da barra. */
@@ -90,7 +93,9 @@ async function toAttachment(file: File): Promise<Attachment> {
  * mãos livres; escrever sempre funcionou e continua funcionando com ele
  * desligado.
  */
-export function ConversationPanel({ onInput, onConfirm, onSaveKnowledge, onOpenArtifact, ttsEnabled }: Props) {
+export function ConversationPanel({
+  onInput, onConfirm, onSaveKnowledge, onDiscardKnowledge, onOpenArtifact, ttsEnabled,
+}: Props) {
   const conversation = useSession((state) => state.conversation);
   const turns = useSession((state) => state.turns);
   const voice = useSession((state) => state.voice);
@@ -99,6 +104,7 @@ export function ConversationPanel({ onInput, onConfirm, onSaveKnowledge, onOpenA
   const result = useSession((state) => state.result);
   const workflowState = useSession((state) => state.workflow?.state);
   const treeReady = useSession((state) => state.treeStatus === 'ok');
+  const reused = useSession((state) => state.reusedSubjects);
 
   const [error, setError] = useState<string | null>(null);
   const [heard, setHeard] = useState<string | null>(null);
@@ -119,6 +125,16 @@ export function ConversationPanel({ onInput, onConfirm, onSaveKnowledge, onOpenA
 
   // O botão de guardar só faz sentido depois que a análise terminou bem.
   const canSave = workflowState === 'done' && treeReady;
+  /*
+   * Guardar e atualizar são ações diferentes e a tela precisa dizer qual é.
+   *
+   * Se esta análise nasceu em cima de um assunto que já está no Tree, gravá-la
+   * como nova não cria conhecimento: cria um segundo assunto sobre a mesma
+   * coisa, e da próxima vez os dois voltam como contexto. O que se quer ali é
+   * reescrever aquele — e o botão tem que dizer isso ANTES do clique, não
+   * depois.
+   */
+  const updating = reused[0] ?? null;
   useEffect(() => setSaved(false), [workflowState]);
 
   const addFiles = useCallback((files: FileList | File[] | null) => {
@@ -308,9 +324,12 @@ export function ConversationPanel({ onInput, onConfirm, onSaveKnowledge, onOpenA
                   ))}
                 </div>
               )}
-              {turn.text}
+              <BubbleText text={turn.text} />
             </div>
           ))}
+          {/* O que ele está FAZENDO aparece no centro, como bloco e seta —
+              ler arquivo é trabalho, e trabalho não mora na conversa. Aqui fica
+              só o sinal de que ele está pensando. */}
           {conversation.thinking && <div className={styles.thinking}>pensando…</div>}
 
           {result && (result.artifacts.length > 0 || canSave) && (
@@ -335,18 +354,37 @@ export function ConversationPanel({ onInput, onConfirm, onSaveKnowledge, onOpenA
                 </div>
               )}
               {canSave && (
-                <button
-                  type="button"
-                  className={styles.save}
-                  disabled={saved}
-                  onClick={() => {
-                    onSaveKnowledge();
-                    setSaved(true);
-                  }}
-                  title="Grava esta análise como assunto reutilizável — da próxima vez ela entra como contexto pronto"
-                >
-                  {saved ? '✓ guardado' : '✓ Guardar no Tree'}
-                </button>
+                <div className={styles.keepRow}>
+                  <button
+                    type="button"
+                    className={styles.save}
+                    disabled={saved}
+                    onClick={() => {
+                      onSaveKnowledge();
+                      setSaved(true);
+                    }}
+                    title={updating
+                      ? `Reescreve “${updating.title}” com o que saiu desta análise — resumo e stack`
+                      : 'Grava esta análise como assunto reutilizável — da próxima vez ela entra como contexto pronto'}
+                  >
+                    {saved
+                      ? (updating ? '✓ atualizado' : '✓ guardado')
+                      : (updating ? `↻ Atualizar “${updating.title}”` : '✓ Guardar no Tree')}
+                  </button>
+                  {!saved && (
+                    <button
+                      type="button"
+                      className={styles.discard}
+                      onClick={() => {
+                        onDiscardKnowledge();
+                        setSaved(false);
+                      }}
+                      title="Não guarda nada — esta análise não vira assunto do Tree"
+                    >
+                      ✕ Descartar
+                    </button>
+                  )}
+                </div>
               )}
             </div>
           )}

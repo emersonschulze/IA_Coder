@@ -1,7 +1,14 @@
 /** Modelos de domínio do IA_Coder. Espelham o que o servidor envia. */
 
 export type AgentState = 'idle' | 'working' | 'blocked' | 'done' | 'error';
-export type BlockState = 'queued' | 'running' | 'done' | 'error';
+/**
+ * `cancelled` existe porque abortar não é concluir.
+ *
+ * Os blocos que estavam rodando eram marcados como `done` no cancelamento, e a
+ * tela passava a dizer "concluído" para trabalho que foi interrompido no meio —
+ * exatamente a informação que você precisa para saber que aquilo não vale.
+ */
+export type BlockState = 'queued' | 'running' | 'done' | 'error' | 'cancelled';
 export type WorkflowState = 'idle' | 'running' | 'done' | 'failed' | 'cancelled';
 export type LogLevel = 'info' | 'ok' | 'warn' | 'error';
 
@@ -56,6 +63,8 @@ export interface Workflow {
   progress: number;
   etaSeconds?: number;
   startedAt?: number;
+  /** "investigation" é o agente lendo para responder no Talking; não gera resumo. */
+  kind?: 'execution' | 'investigation';
 }
 
 export interface LogEntry {
@@ -153,8 +162,55 @@ export interface AuthState {
   reason?: 'expired' | 'missing';
 }
 
+/**
+ * Um servidor MCP configurado no Claude Code, e se dá para usar.
+ *
+ * Duas coisas diferentes derrubam uma ferramenta de MCP, e a tela precisa saber
+ * qual: `needs-auth` é falta de credencial (resolve com login) e `connected`
+ * falhando mesmo assim é falta de permissão (resolve no modo do processo, veja
+ * `McpState.reachable`).
+ */
+export type McpStatus = 'connected' | 'needs-auth' | 'pending' | 'failed';
+
+export interface McpServer {
+  /** O nome como o CLI mostra, com espaço e pontuação. É o que `mcp login` recebe. */
+  name: string;
+  /** O nome normalizado que vira prefixo das ferramentas: `mcp__<slug>__…`. */
+  slug: string;
+  /** URL, ou a linha de comando, conforme o transporte. */
+  target: string;
+  status: McpStatus;
+  /** O texto cru do CLI, para o caso de um status que não sabemos ler. */
+  label: string;
+}
+
+export interface McpState {
+  servers: McpServer[];
+  checkedAt: number;
+  /** Uma varredura em andamento — a lista na tela ainda é a anterior. */
+  checking: boolean;
+  error?: string;
+  /** O modo de permissão do processo alcança ferramenta de MCP? */
+  reachable: boolean;
+  permissionMode: string;
+  /** O servidor que acabou de atrapalhar uma resposta — é o que abre o popup. */
+  blocked?: { server: string; tool: string; reason: 'needs-auth' | 'permission' } | null;
+}
+
 /** Por que o Tree está do jeito que está. */
-export type TreeStatus = 'ok' | 'unreachable' | 'schema-missing' | 'connecting';
+export type TreeStatus =
+  | 'ok'
+  | 'unreachable'
+  /**
+   * Alguém atendeu na porta e derrubou a conexão.
+   *
+   * Não é o banco fora do ar — é o encaminhamento de porta da WSL apontando
+   * para um container que não existe mais. Separado de `unreachable` porque o
+   * conserto é outro: `wsl --shutdown`, não `docker compose up -d`.
+   */
+  | 'relay-broken'
+  | 'schema-missing'
+  | 'connecting';
 
 export type ComponentKind =
   | 'microfrontend' | 'microservice' | 'api' | 'database' | 'cache'

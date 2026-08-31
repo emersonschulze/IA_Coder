@@ -19,6 +19,7 @@ interface Props {
 export function AgentsPanel({ onInspect }: Props) {
   const agents = useSession((state) => state.agents);
   const blocks = useSession((state) => state.blocks);
+  const skills = useSession((state) => state.skills);
   const setPreviewLinks = useSession((state) => state.setPreviewLinks);
   const hasServerLinks = useSession((state) => state.links.length > 0);
 
@@ -27,6 +28,23 @@ export function AgentsPanel({ onInspect }: Props) {
   const [query, setQuery] = useState('');
 
   const working = agents.filter((agent) => agent.state === 'working').length;
+  const skillById = useMemo(() => new Map(skills.map((skill) => [skill.id, skill])), [skills]);
+
+  /*
+   * A segunda linha do cartão troca de assunto conforme o agente trabalha.
+   *
+   * Parado, ela diz de onde ele veio ("JUNTOAGENTS") — que é o que importa
+   * quando você está escolhendo. Trabalhando, ela diz a SKILL em curso, porque
+   * aí a pergunta virou outra: não é mais "quem é este agente", é "o que ele
+   * está fazendo agora". Um dev-qa tem sete skills e passa por várias numa
+   * tarefa só; a origem dele não muda nunca e não responde nada.
+   */
+  const lineFor = (role: string, state: string, skillId?: string | null): string => {
+    if (state !== 'working' || !skillId) return role;
+    const skill = skillById.get(skillId);
+    if (!skill) return role;
+    return skill.kind === 'skill' ? `▸ ${skill.name}` : `▸ ${skill.name.toLowerCase()}`;
+  };
   const ordered = useMemo(() => {
     const found = agents.filter((agent) => matches(query, agent.name, agent.role, agent.source));
     return pinnedFirst(found, (agent) => agent.state === 'working', pinActive);
@@ -84,17 +102,23 @@ export function AgentsPanel({ onInspect }: Props) {
         ) : ordered.length === 0 ? (
           <PanelEmpty>nenhum agente com “{query}”</PanelEmpty>
         ) : (
-          ordered.map((agent) => (
+          ordered.map((agent, index) => (
             <div key={agent.id} data-flip-key={agent.id}>
               <EntityCard
                 kind="agent"
                 id={agent.id}
                 name={agent.name}
-                role={agent.role}
-                hint={agent.source ? `${agent.name} — instalado por ${agent.source}` : agent.name}
+                role={lineFor(agent.role, agent.state, agent.skillId)}
+                hint={[
+                  agent.source ? `${agent.name} — instalado por ${agent.source}` : agent.name,
+                  agent.state === 'working' && agent.skillId
+                    ? `usando: ${skillById.get(agent.skillId)?.name ?? agent.skillId}`
+                    : '',
+                ].filter(Boolean).join('\n')}
                 color={agent.color}
                 initials={agent.initials}
                 active={agent.state === 'working'}
+                scrollOnActive={!pinActive || index === 0}
                 progress={agent.progress ?? 0}
                 onHoverStart={() => preview(agent.id)}
                 onHoverEnd={clearPreview}

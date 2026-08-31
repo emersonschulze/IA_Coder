@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { config } from './config.js';
+import { killTree } from './proctree.js';
 
 export type ShellStatus = 'stopped' | 'starting' | 'ready' | 'error';
 
@@ -85,7 +86,14 @@ export class ShellSession extends EventEmitter {
     this.queue.forEach((pending) => pending.resolve({ output: '', exitCode: -1 }));
     this.queue = [];
     this.buffer = '';
-    this.child?.kill();
+    /*
+     * A árvore, não só o PowerShell.
+     *
+     * Matar o shell no meio de um `dotnet build` não para o `dotnet`: ele fica
+     * rodando órfão, segurando arquivo e queimando CPU sem ninguém olhando —
+     * que é o oposto do que "abortar" quer dizer.
+     */
+    killTree(this.child);
     this.child = null;
     if (this.status !== 'error') this.setStatus('stopped');
   }
