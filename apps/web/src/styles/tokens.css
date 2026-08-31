@@ -1,0 +1,47 @@
+/* Design tokens do IA_Coder. Mexa aqui para mudar o tema inteiro. */
+:root {
+  color-scheme: dark;
+
+  /* superfícies */
+  --bg: #04060c;
+  --bg-soft: #070b16;
+  --panel: rgba(12, 18, 32, 0.72);
+  --panel-solid: rgba(9, 14, 26, 0.92);
+  --line: rgba(90, 190, 255, 0.16);
+  --line-hot: rgba(120, 220, 255, 0.55);
+
+  /* texto */
+  --txt: #d7e6f5;
+  --txt-dim: #7d92ab;
+  --txt-faint: #4b6076;
+
+  /* acentos */
+  --cy: #22d3ee;
+  --vi: #a855f7;
+  --gr: #34d399;
+  --am: #fbbf24;
+  --rd: #fb7185;
+
+  /* tipografia */
+  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
+  --ui: 'Inter', -apple-system, 'Segoe UI', Roboto, system-ui, sans-serif;
+
+  /* forma */
+  --radius: 14px;
+  --radius-sm: 10px;
+  --gap: 12px;
+
+  /* movimento */
+  --ease: cubic-bezier(0.2, 0.9, 0.25, 1);
+  --fast: 0.2s;
+  --normal: 0.38s;
+  --slow: 0.6s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --fast: 0.01ms;
+    --normal: 0.01ms;
+    --slow: 0.01ms;
+  }
+}

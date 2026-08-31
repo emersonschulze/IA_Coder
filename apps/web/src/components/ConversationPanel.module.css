@@ -1,0 +1,453 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  padding: 11px;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--txt-dim);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: var(--fast);
+}
+.toggle:hover {
+  color: var(--cy);
+  border-color: var(--line-hot);
+}
+.on {
+  color: #04121a;
+  border-color: transparent;
+  background: linear-gradient(90deg, var(--cy), #818cf8 60%, var(--vi));
+  box-shadow: 0 0 30px -8px var(--cy);
+}
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.55;
+}
+.on .dot {
+  background: #04121a;
+  opacity: 1;
+  animation: pulse 1.6s infinite;
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.3;
+    transform: scale(0.7);
+  }
+}
+
+/* Waveform: some enquanto o microfone está desligado, acende com ele. */
+.wave {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  height: 42px;
+  margin-bottom: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: radial-gradient(120% 140% at 50% 120%, rgba(34, 211, 238, 0.1), transparent 70%);
+  transition: var(--fast);
+}
+.waveAwake {
+  border-color: color-mix(in srgb, var(--cy) 55%, transparent);
+  background: radial-gradient(120% 140% at 50% 120%, rgba(34, 211, 238, 0.24), transparent 70%);
+}
+.bar {
+  width: 3px;
+  height: 4px;
+  border-radius: 3px;
+  background: linear-gradient(180deg, var(--cy), var(--vi));
+  opacity: 0.5;
+}
+.waveAwake .bar {
+  opacity: 1;
+}
+
+.off {
+  margin: auto 0;
+  padding: 14px 8px;
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.8;
+  text-align: center;
+  color: var(--txt-faint);
+}
+.off b {
+  color: var(--cy);
+}
+
+.warn {
+  margin: 9px 0 0;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  line-height: 1.6;
+  color: var(--am);
+}
+.warn code {
+  color: #ffe9b8;
+}
+
+/* Transcrição da conversa — cresce com o espaço que o painel ganhar; o
+   scroll fica preso na borda direita dele, não numa altura fixa. */
+.feed {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-height: 90px;
+  padding-right: 4px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.mine,
+.theirs {
+  max-width: 92%;
+  padding: 7px 10px;
+  border-radius: 10px;
+  font-size: 11.5px;
+  line-height: 1.55;
+  animation: pop 0.25s var(--ease);
+}
+.mine {
+  align-self: flex-end;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--txt);
+}
+.theirs {
+  align-self: flex-start;
+  border-left: 2px solid var(--vi);
+  border-radius: 0 10px 10px 0;
+  background: linear-gradient(90deg, rgba(168, 85, 247, 0.14), transparent);
+  color: #e6d9ff;
+}
+.thinking {
+  align-self: flex-start;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--txt-faint);
+}
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+/* Imagens dentro de uma bolha do chat — a sua ou a que ele te mostra. */
+.bubbleImages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 6px;
+}
+.bubbleImages img {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+/* O consolidado de uma execução — arquivos e o botão de guardar, encostados
+   na última fala do agente em vez de ganharem um painel à parte. */
+.resultRow {
+  align-self: flex-start;
+  max-width: 92%;
+}
+.artifacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.artifact {
+  padding: 5px 9px;
+  border: 1px solid color-mix(in srgb, var(--cy) 45%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--cy) 10%, transparent);
+  color: #cdefff;
+  font-family: var(--mono);
+  font-size: 10px;
+  cursor: pointer;
+  transition: var(--fast);
+}
+.artifact:hover {
+  background: color-mix(in srgb, var(--cy) 22%, transparent);
+  box-shadow: 0 0 16px -6px var(--cy);
+}
+.save {
+  display: block;
+  margin-top: 8px;
+  padding: 6px 11px;
+  border: 1px solid color-mix(in srgb, var(--gr) 50%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--gr) 12%, transparent);
+  color: #9df3d0;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: var(--fast);
+}
+.save:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--gr) 22%, transparent);
+  box-shadow: 0 0 18px -6px var(--gr);
+}
+.save:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* O plano na mesa, esperando o "pode ir". */
+.plan {
+  flex: 0 0 auto;
+  margin-top: 11px;
+  padding: 11px;
+  border: 1px solid color-mix(in srgb, var(--cy) 40%, transparent);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--cy) 8%, transparent);
+}
+.planHead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.planHead strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+.risk {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.risk[data-risk='low'] {
+  color: var(--gr);
+}
+.risk[data-risk='medium'] {
+  color: var(--am);
+}
+.risk[data-risk='high'] {
+  color: var(--rd);
+}
+.steps {
+  margin: 0 0 10px;
+  padding-left: 17px;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--txt-dim);
+}
+.confirm {
+  display: flex;
+  gap: 8px;
+}
+.go {
+  flex: 1;
+  padding: 9px;
+  border: 0;
+  border-radius: 9px;
+  background: linear-gradient(90deg, var(--gr), var(--cy));
+  color: #04121a;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.go:hover {
+  filter: brightness(1.1);
+}
+.no {
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--txt-dim);
+  font-size: 11px;
+  cursor: pointer;
+}
+.no:hover {
+  color: var(--rd);
+  border-color: color-mix(in srgb, var(--rd) 50%, transparent);
+}
+
+/* Imagens anexadas, ainda não enviadas — uma fileira de miniaturas em cima
+   da caixa de digitar. */
+.pendingImages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 0 0 auto;
+  margin-top: 10px;
+}
+.pendingImage {
+  position: relative;
+  width: 52px;
+  height: 52px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+.pendingImage img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.pendingRemove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(4, 8, 16, 0.75);
+  color: #fff;
+  font-size: 9px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/* A caixa única: anexar, escrever, enviar — tudo numa pílula só. */
+.composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  flex: 0 0 auto;
+  margin-top: 10px;
+  padding: 6px 6px 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(4, 8, 16, 0.6);
+  transition: var(--fast);
+}
+.composer:focus-within {
+  border-color: var(--line-hot);
+  box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.08);
+}
+.attachButton {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  margin-bottom: 1px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--txt-dim);
+  font-size: 14px;
+  cursor: pointer;
+  transition: var(--fast);
+}
+.attachButton:hover {
+  color: var(--cy);
+  background: rgba(34, 211, 238, 0.14);
+}
+.composerInput {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-height: 120px;
+  padding: 8px 2px;
+  border: 0;
+  background: none;
+  color: var(--txt);
+  font-family: var(--ui);
+  font-size: 12.5px;
+  line-height: 1.5;
+  resize: none;
+  outline: none;
+}
+.composerInput::placeholder {
+  color: var(--txt-faint);
+}
+.composerSend {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--cy), var(--vi));
+  color: #04121a;
+  font-size: 14px;
+  cursor: pointer;
+  box-shadow: 0 0 18px -6px rgba(34, 211, 238, 0.7);
+  transition: var(--fast);
+}
+.composerSend:hover:not(:disabled) {
+  filter: brightness(1.12);
+}
+.composerSend:disabled {
+  filter: grayscale(0.6) brightness(0.7);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.tip,
+.heard {
+  flex: 0 0 auto;
+  margin: 8px 0 0;
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--txt-faint);
+}
+.heard {
+  margin-top: 9px;
+  font-style: italic;
+}
+
+/* Ampliado pela lupa: a transcrição é o que interessa ler. */
+:global([data-zoomed]) .wrap {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 16px;
+}
+:global([data-zoomed]) .feed {
+  flex: 1;
+  gap: 9px;
+}
+:global([data-zoomed]) .mine,
+:global([data-zoomed]) .theirs {
+  max-width: 78%;
+  padding: 10px 13px;
+  font-size: 13.5px;
+  line-height: 1.7;
+}
+:global([data-zoomed]) .steps {
+  font-size: 12.5px;
+}
+:global([data-zoomed]) .composerInput {
+  font-size: 13.5px;
+  line-height: 1.75;
+}

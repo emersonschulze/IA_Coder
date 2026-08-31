@@ -1,0 +1,242 @@
+.wrap {
+  padding: 11px;
+}
+.voice {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  height: 74px;
+  padding-bottom: 14px;
+  margin-bottom: 10px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background:
+    radial-gradient(120% 140% at 50% 120%, rgba(34, 211, 238, 0.16), transparent 70%),
+    rgba(255, 255, 255, 0.02);
+  cursor: pointer;
+  overflow: hidden;
+  transition: var(--fast);
+}
+.voice:hover {
+  border-color: var(--line-hot);
+}
+.voiceRecording {
+  border-color: color-mix(in srgb, var(--rd) 60%, transparent);
+  background:
+    radial-gradient(120% 140% at 50% 120%, rgba(251, 113, 133, 0.22), transparent 70%),
+    rgba(255, 255, 255, 0.02);
+}
+.voiceDisabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.bar {
+  width: 3px;
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(180deg, var(--cy), var(--vi));
+  opacity: 0.85;
+}
+.voiceRecording .bar {
+  background: linear-gradient(180deg, #fb7185, #f472b6);
+}
+.hint {
+  position: absolute;
+  bottom: 5px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--txt-dim);
+  text-shadow: 0 0 8px #04060c, 0 0 6px #04060c;
+  pointer-events: none;
+}
+.voiceRecording .hint {
+  color: #ffd9df;
+}
+
+.input {
+  width: 100%;
+  min-height: 98px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: rgba(4, 8, 16, 0.6);
+  color: var(--txt);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.65;
+  resize: none;
+  outline: none;
+  transition: var(--fast);
+}
+.input:focus {
+  border-color: var(--line-hot);
+  box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.08);
+}
+.input::placeholder {
+  color: #4e6178;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 9px;
+}
+.run {
+  flex: 1;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: #04121a;
+  background: linear-gradient(90deg, var(--cy), #818cf8 60%, var(--vi));
+  box-shadow: 0 0 26px -6px rgba(34, 211, 238, 0.65);
+  cursor: pointer;
+  transition: var(--fast);
+}
+.run:hover:not(:disabled) {
+  filter: brightness(1.12);
+  box-shadow: 0 0 34px -4px rgba(34, 211, 238, 0.9);
+}
+.run:disabled {
+  cursor: not-allowed;
+  filter: grayscale(0.7) brightness(0.7);
+  box-shadow: none;
+}
+.mini {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--txt-dim);
+  font-size: 14px;
+  cursor: pointer;
+  transition: var(--fast);
+}
+.mini:hover {
+  color: var(--cy);
+  border-color: var(--line-hot);
+}
+.miniOn {
+  color: #04121a;
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--gr), var(--cy));
+}
+.answer {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-left: 2px solid var(--vi);
+  border-radius: 0 9px 9px 0;
+  background: linear-gradient(90deg, rgba(168, 85, 247, 0.12), transparent);
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: #e6d9ff;
+  animation: pop 0.4s var(--ease);
+}
+.answerLabel {
+  display: block;
+  margin-bottom: 4px;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--vi);
+}
+/* Os arquivos que a execução gerou — clique abre no programa padrão. */
+.artifacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.artifact {
+  padding: 5px 9px;
+  border: 1px solid color-mix(in srgb, var(--cy) 45%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--cy) 10%, transparent);
+  color: #cdefff;
+  font-family: var(--mono);
+  font-size: 10px;
+  cursor: pointer;
+  transition: var(--fast);
+}
+.artifact:hover {
+  background: color-mix(in srgb, var(--cy) 22%, transparent);
+  box-shadow: 0 0 16px -6px var(--cy);
+}
+
+.save {
+  display: block;
+  margin-top: 9px;
+  padding: 6px 11px;
+  border: 1px solid color-mix(in srgb, var(--gr) 50%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--gr) 12%, transparent);
+  color: #9df3d0;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: var(--fast);
+}
+.save:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--gr) 22%, transparent);
+  box-shadow: 0 0 18px -6px var(--gr);
+}
+.save:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.notice {
+  margin-top: 8px;
+  font-family: var(--mono);
+  font-size: 9px;
+  line-height: 1.6;
+  letter-spacing: 0.05em;
+  color: var(--am);
+}
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+/* Ampliado pela lupa: o espaço extra vira área de leitura e de escrita. */
+:global([data-zoomed]) .wrap {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 16px;
+}
+:global([data-zoomed]) .input {
+  flex: 1;
+  min-height: 26vh;
+  font-size: 13.5px;
+  line-height: 1.75;
+}
+:global([data-zoomed]) .answer {
+  max-height: 34vh;
+  overflow: auto;
+  font-size: 13.5px;
+  line-height: 1.75;
+}
+:global([data-zoomed]) .voice {
+  flex: 0 0 auto;
+}

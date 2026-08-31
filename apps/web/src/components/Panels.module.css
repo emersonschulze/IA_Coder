@@ -1,0 +1,504 @@
+/* ---------- casca de painel ---------- */
+.panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 20px 50px -30px #000, inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+.panel::before,
+.panel::after {
+  content: '';
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border: 1px solid rgba(34, 211, 238, 0.5);
+  pointer-events: none;
+}
+.panel::before {
+  top: -1px;
+  left: -1px;
+  border-right: 0;
+  border-bottom: 0;
+  border-radius: var(--radius) 0 0 0;
+}
+.panel::after {
+  bottom: -1px;
+  right: -1px;
+  border-left: 0;
+  border-top: 0;
+  border-radius: 0 0 var(--radius) 0;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.title {
+  margin: 0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: #9fd7ee;
+  text-shadow: 0 0 14px rgba(34, 211, 238, 0.35);
+}
+.badge {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--txt-dim);
+}
+
+/* ---------- painel com abas (ex.: Archives/Status alternando) ---------- */
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: auto;
+}
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: none;
+  color: var(--txt-faint);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: var(--fast);
+}
+.tab:hover {
+  color: var(--txt-dim);
+  border-color: var(--line);
+}
+.tabOn {
+  color: #9fd7ee;
+  border-color: var(--line-hot);
+  background: rgba(34, 211, 238, 0.1);
+  text-shadow: 0 0 14px rgba(34, 211, 238, 0.35);
+}
+.tabBadge {
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--txt-dim);
+}
+.tabOn .tabBadge {
+  background: rgba(34, 211, 238, 0.22);
+  color: #dff8ff;
+}
+/* ---------- painel ampliado (a lupa) ---------- */
+.zoomOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  /* Escurece sem esconder: o resto do projeto continua visível atrás. */
+  background: rgba(3, 6, 12, 0.58);
+  backdrop-filter: blur(3px);
+  animation: zoomFade 0.18s ease;
+}
+@keyframes zoomFade {
+  from {
+    opacity: 0;
+  }
+}
+.zoomFrame {
+  display: flex;
+  width: 80vw;
+  height: 80vh;
+  animation: zoomIn 0.22s cubic-bezier(0.2, 0.9, 0.25, 1);
+}
+@keyframes zoomIn {
+  from {
+    opacity: 0;
+    transform: scale(0.965);
+  }
+}
+.panelZoomed {
+  flex: 1;
+  min-height: 0;
+  border-color: var(--line-hot);
+  box-shadow: 0 50px 140px -50px #000, 0 0 90px -40px var(--cy);
+}
+/* No modo ampliado o conteúdo respira: fonte maior e sem teto de altura. */
+.panelZoomed .body {
+  font-size: 13px;
+}
+.panelZoomed .archiveName {
+  font-size: 13px;
+}
+.panelZoomed .treeWrap {
+  min-height: 0;
+}
+.panelZoomed .empty {
+  font-size: 12px;
+}
+
+.headAction {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 18px;
+  margin-left: 6px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--txt-faint);
+  font-size: 9px;
+  line-height: 1;
+  cursor: pointer;
+  transition: var(--fast);
+}
+.headAction:hover {
+  color: var(--cy);
+  border-color: var(--line-hot);
+}
+.headActionOn {
+  color: #04121a;
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--cy), #7dd3fc);
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  padding: 10px;
+  overflow: auto;
+}
+
+.empty {
+  padding: 14px 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.7;
+  letter-spacing: 0.06em;
+  color: var(--txt-faint);
+  text-align: center;
+}
+
+/* ---------- card de agente / skill ---------- */
+.card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  margin-bottom: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 11px;
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.012));
+  cursor: default;
+  transition:
+    transform var(--normal) var(--ease),
+    box-shadow var(--normal),
+    border-color var(--normal),
+    opacity var(--normal),
+    filter var(--normal);
+}
+/* Cada card mora dentro de um embrulho de FLIP, então `.card:last-child`
+   valeria para todos. A margem some só no último item da lista. */
+.body > *:last-child .card,
+.body > .card:last-child {
+  margin-bottom: 0;
+}
+.avatar {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  color: #04121a;
+  background: var(--c);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.15);
+}
+.cardMeta {
+  flex: 1;
+  min-width: 0;
+}
+.cardName {
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cardRole {
+  margin-top: 2px;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  color: var(--txt-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pulse {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #3c4c60;
+  transition: var(--fast);
+}
+.cardBar {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: 0;
+  border-radius: 0 0 11px 11px;
+  background: var(--c);
+  box-shadow: 0 0 10px var(--c);
+  transition: width var(--slow) linear;
+}
+
+.cardActive {
+  z-index: 5;
+  transform: translateX(6px) scale(1.055);
+  border-color: var(--c);
+  background: linear-gradient(160deg, color-mix(in srgb, var(--c) 22%, transparent), rgba(255, 255, 255, 0.02));
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--c) 45%, transparent),
+    0 0 34px -6px var(--c),
+    0 18px 40px -22px #000;
+}
+.cardActive .pulse {
+  background: var(--c);
+  box-shadow: 0 0 10px var(--c);
+  animation: beat 1.1s infinite;
+}
+.cardActive::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: 11px;
+  border: 1px solid color-mix(in srgb, var(--c) 55%, transparent);
+  pointer-events: none;
+  animation: halo 1.8s ease-out infinite;
+}
+.cardIdleReady .pulse {
+  background: #4a6b7d;
+}
+@keyframes beat {
+  50% {
+    opacity: 0.35;
+    transform: scale(0.75);
+  }
+}
+@keyframes halo {
+  0% {
+    opacity: 0.9;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.06);
+  }
+}
+
+/* ---------- status ---------- */
+.gauge {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 2px 2px 10px;
+}
+.gauge svg {
+  transform: rotate(-90deg);
+}
+.gaugeLabel {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  color: var(--txt-dim);
+}
+.gaugeValue {
+  font-family: var(--mono);
+  font-size: 19px;
+  font-weight: 700;
+  color: #eaf6ff;
+}
+.meter {
+  margin-bottom: 9px;
+}
+.meter:last-child {
+  margin-bottom: 0;
+}
+.meterRow {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.05em;
+  color: var(--txt-dim);
+}
+.meterRow b {
+  color: var(--txt);
+  font-weight: 600;
+}
+.track {
+  height: 5px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.07);
+  overflow: hidden;
+}
+.fill {
+  height: 100%;
+  border-radius: 9px;
+  background: linear-gradient(90deg, var(--cy), var(--vi));
+  box-shadow: 0 0 12px rgba(34, 211, 238, 0.5);
+  transition: width var(--slow) var(--ease);
+}
+.fillGreen {
+  background: linear-gradient(90deg, var(--gr), var(--cy));
+  box-shadow: 0 0 12px rgba(52, 211, 153, 0.45);
+}
+.fillAmber {
+  background: linear-gradient(90deg, var(--am), #fb923c);
+  box-shadow: 0 0 12px rgba(251, 191, 36, 0.45);
+}
+
+/* ---------- tree ---------- */
+.treeWrap {
+  position: relative;
+  flex: 1;
+  min-height: 150px;
+}
+.treeCanvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.treeTip {
+  position: absolute;
+  padding: 4px 8px;
+  border: 1px solid var(--line-hot);
+  border-radius: 7px;
+  background: rgba(4, 10, 20, 0.92);
+  color: #cdefff;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--fast);
+}
+.treeTipVisible {
+  opacity: 1;
+}
+
+.graphEmpty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  padding: 0 22px;
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  line-height: 1.7;
+  letter-spacing: 0.05em;
+  text-align: center;
+  color: var(--txt-faint);
+  pointer-events: none;
+}
+.treeCrumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--txt-faint);
+}
+.treeCrumb strong {
+  color: var(--txt);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.crumbLink {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--cy);
+  font: inherit;
+  cursor: pointer;
+}
+.crumbLink:hover {
+  text-decoration: underline;
+}
+
+/* ---------- archives ---------- */
+.archive {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 9px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: none;
+  width: 100%;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+  transition: var(--fast);
+}
+.archive:hover {
+  border-color: var(--line);
+  background: rgba(255, 255, 255, 0.035);
+  transform: translateX(3px);
+}
+.archiveIcon {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 11px;
+}
+.archiveName {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.archiveTime {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--txt-faint);
+}

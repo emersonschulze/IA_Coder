@@ -1,0 +1,44 @@
+.shell {
+  position: relative;
+  z-index: 2;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.stage {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  /* O centro continua sendo o principal, mas cede espaço: a coluna da direita
+     (conversa, caixa de texto, tree) é onde se lê texto, e texto quer largura. */
+  grid-template-columns: 256px minmax(0, 1fr) 420px;
+  gap: var(--gap);
+}
+
+.column {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  min-height: 0;
+}
+
+/* Enquanto há agente trabalhando, o resto recua. Fora disso, tudo aparece pleno. */
+.focusing :global(.dimmable):not(:global(.spotlight)) {
+  opacity: 0.34;
+  filter: saturate(0.35) blur(0.35px);
+}
+
+@media (max-width: 1600px) {
+  .stage {
+    grid-template-columns: 236px minmax(0, 1fr) 370px;
+  }
+}
+
+@media (max-width: 1280px) {
+  .stage {
+    grid-template-columns: 208px minmax(0, 1fr) 320px;
+  }
+}

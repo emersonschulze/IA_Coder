@@ -1,0 +1,125 @@
+.topbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 46px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: linear-gradient(90deg, rgba(12, 18, 32, 0.9), rgba(9, 14, 26, 0.6));
+  backdrop-filter: blur(14px);
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+.brand small {
+  font-size: 12.5px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  color: var(--txt-dim);
+}
+.dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--cy);
+  box-shadow: 0 0 12px var(--cy);
+  animation: pulse 2s infinite;
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+    transform: scale(0.75);
+  }
+}
+.metrics {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--txt-dim);
+}
+.chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.02);
+  white-space: nowrap;
+}
+.chipButton {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--txt-dim);
+  cursor: pointer;
+  transition: var(--fast);
+  max-width: 210px;
+  overflow: hidden;
+}
+.chipButton:hover {
+  color: var(--cy);
+  border-color: var(--line-hot);
+  box-shadow: 0 0 16px rgba(34, 211, 238, 0.18);
+}
+.folder {
+  color: var(--cy);
+  font-size: 10px;
+}
+.chip b {
+  color: var(--txt);
+  font-weight: 600;
+}
+.led {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--gr);
+  box-shadow: 0 0 8px var(--gr);
+}
+.ledWarn {
+  background: var(--am);
+  box-shadow: 0 0 8px var(--am);
+  animation: pulse 1.1s infinite;
+}
+.ledDown {
+  background: var(--rd);
+  box-shadow: 0 0 8px var(--rd);
+}
+.action {
+  padding: 6px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--txt-dim);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: var(--fast);
+}
+.action:hover {
+  color: var(--cy);
+  border-color: var(--line-hot);
+  box-shadow: 0 0 16px rgba(34, 211, 238, 0.18);
+}
+.actionOn {
+  color: #04121a;
+  font-weight: 700;
+  border-color: transparent;
+  background: linear-gradient(90deg, var(--cy), #7dd3fc);
+}
+.actionDanger:hover {
+  color: var(--rd);
+  border-color: color-mix(in srgb, var(--rd) 55%, transparent);
+  box-shadow: 0 0 16px rgba(251, 113, 133, 0.2);
+}

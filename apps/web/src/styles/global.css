@@ -1,0 +1,88 @@
+@import './tokens.css';
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--txt);
+  font-family: var(--ui);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font-family: inherit;
+}
+
+::selection {
+  background: rgba(34, 211, 238, 0.28);
+}
+
+/* Scrollbars discretas, no tom do tema. */
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(90, 190, 255, 0.22);
+  border-radius: 9px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(120, 220, 255, 0.4);
+}
+
+/* Fundo global: aurora + grade + scanlines. Puramente decorativo. */
+.app-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+.app-backdrop::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(1100px 700px at 12% -10%, rgba(34, 211, 238, 0.14), transparent 60%),
+    radial-gradient(900px 600px at 92% 8%, rgba(168, 85, 247, 0.13), transparent 60%),
+    radial-gradient(1200px 800px at 50% 120%, rgba(52, 211, 153, 0.08), transparent 60%),
+    linear-gradient(180deg, #04060c, #060a14 60%, #04060c);
+}
+.app-backdrop::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  opacity: 0.35;
+  background-image:
+    linear-gradient(rgba(90, 190, 255, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(90, 190, 255, 0.06) 1px, transparent 1px);
+  background-size: 46px 46px;
+  mask-image: radial-gradient(ellipse at 50% 40%, #000 30%, transparent 85%);
+  animation: grid-drift 26s linear infinite;
+}
+@keyframes grid-drift {
+  to {
+    background-position: 46px 46px, 46px 46px;
+  }
+}
+.app-scanlines {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  mix-blend-mode: overlay;
+  opacity: 0.5;
+  background: repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.028) 0 1px, transparent 1px 3px);
+}

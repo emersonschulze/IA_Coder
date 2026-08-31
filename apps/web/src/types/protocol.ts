@@ -1,0 +1,98 @@
+import type {
+  Agent,
+  AuthState,
+  ConversationState,
+  ImageAttachment,
+  VoiceHealth,
+  AgentState,
+  Artifact,
+  Listing,
+  ProjectState,
+  Block,
+  Link,
+  LogEntry,
+  SessionInfo,
+  Skill,
+  SubjectDetail,
+  SubjectGraph,
+  TreeStatus,
+  Usage,
+  Workflow,
+  WorkflowState,
+} from './domain';
+
+/** Eventos que o servidor manda para a interface. */
+export type ServerEvent =
+  | { type: 'session.hello'; session: SessionInfo }
+  | { type: 'agents.sync'; agents: Agent[] }
+  | { type: 'skills.sync'; skills: Skill[] }
+  | {
+      type: 'agent.state';
+      agentId: string;
+      state: AgentState;
+      progress?: number;
+      skillId?: string | null;
+    }
+  | { type: 'skill.state'; skillId: string; inUse: boolean }
+  | { type: 'workflow.started'; workflow: Workflow }
+  | { type: 'workflow.updated'; patch: Partial<Workflow> & { id: string } }
+  | { type: 'workflow.finished'; id: string; state: WorkflowState; summary?: string }
+  | { type: 'block.upsert'; block: Block }
+  | { type: 'block.patch'; patch: Partial<Block> & { id: string } }
+  | { type: 'block.log'; blockId: string; entry: LogEntry }
+  | { type: 'block.artifact'; blockId: string; artifact: Artifact }
+  | { type: 'link.activated'; link: Link }
+  | { type: 'link.deactivated'; linkId: string }
+  | { type: 'usage'; usage: Usage }
+  | { type: 'tree.subjects'; graph: SubjectGraph; status: TreeStatus }
+  | { type: 'tree.detail'; detail: SubjectDetail | null }
+  | { type: 'knowledge.saved'; id: string; title: string }
+  | { type: 'archives.sync'; archives: Artifact[] }
+  | { type: 'archive.added'; archive: Artifact }
+  | { type: 'assistant.say'; text: string; speak?: boolean }
+  | { type: 'project.state'; project: ProjectState }
+  | { type: 'project.listing'; listing: Listing }
+  | { type: 'project.picked'; path: string | null; error?: string }
+  | { type: 'auth.state'; auth: AuthState }
+  | { type: 'voice.health'; health: VoiceHealth }
+  | { type: 'conversation.state'; state: ConversationState }
+  | { type: 'conversation.turn'; role: 'user' | 'agent'; text: string; images?: ImageAttachment[] }
+  | { type: 'conversation.say'; text: string }
+  | { type: 'auth.login.line'; line: string }
+  | { type: 'auth.login.done'; ok: boolean; urls: string[] }
+  | { type: 'pong' }
+  | { type: 'error'; message: string };
+
+/** Comandos que a interface manda para o servidor. */
+export type ClientCommand =
+  | { type: 'prompt.submit'; text: string; source: 'text' | 'voice' }
+  | { type: 'workflow.cancel'; id: string }
+  | { type: 'agent.inspect'; agentId: string }
+  | { type: 'project.set'; path: string }
+  | { type: 'project.browse'; path?: string }
+  | { type: 'project.roots' }
+  | { type: 'runtime.restart'; target: 'shell' | 'claude' | 'both' }
+  | { type: 'project.pick' }
+  | { type: 'conversation.start' }
+  | { type: 'conversation.stop' }
+  | { type: 'conversation.input'; text: string; images?: ImageAttachment[] }
+  | { type: 'conversation.confirm'; accept: boolean }
+  | { type: 'auth.check' }
+  | { type: 'auth.login'; mode?: 'shell' | 'window' }
+  | { type: 'artifact.open'; path: string; reveal?: boolean }
+  | { type: 'tree.list' }
+  | { type: 'tree.open'; subjectId: string }
+  | { type: 'knowledge.save' }
+  | { type: 'knowledge.forget'; subjectId: string }
+  | { type: 'ping' };
+
+export type ConnectionState = 'connecting' | 'open' | 'reconnecting' | 'closed';
+
+/** Type guard defensivo: nunca confiar cegamente no frame recebido. */
+export function isServerEvent(value: unknown): value is ServerEvent {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { type?: unknown }).type === 'string'
+  );
+}

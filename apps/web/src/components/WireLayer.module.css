@@ -1,0 +1,54 @@
+.layer {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 40;
+  overflow: visible;
+  pointer-events: none;
+}
+.wire {
+  opacity: 0;
+  transition: opacity 0.45s ease;
+}
+.wireVisible {
+  opacity: 1;
+}
+.glow {
+  fill: none;
+  stroke-width: 6;
+  opacity: 0.16;
+  filter: blur(4px);
+}
+.core {
+  fill: none;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-dasharray: 7 9;
+  animation: flow 1.1s linear infinite;
+}
+@keyframes flow {
+  to {
+    stroke-dashoffset: -32;
+  }
+}
+.comet {
+  filter: drop-shadow(0 0 6px currentColor);
+}
+.label {
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  paint-order: stroke;
+  stroke: #04060c;
+  stroke-width: 3.2px;
+  stroke-linejoin: round;
+  opacity: 0.85;
+}
+@media (prefers-reduced-motion: reduce) {
+  .core {
+    animation: none;
+  }
+}

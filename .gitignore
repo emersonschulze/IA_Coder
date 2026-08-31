@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.tsbuild/
+*.tsbuildinfo
+.env
+.env.local
+*.log
+.DS_Store
+Thumbs.db
+
+# Artefatos gerados pelos agentes: ficam no disco, não no repositório.
+workspace/artifacts/*
+!workspace/artifacts/.gitkeep

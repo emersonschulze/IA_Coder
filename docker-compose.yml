@@ -1,0 +1,141 @@
+# IA_Coder — infraestrutura local.
+#
+#   docker compose up -d                   → postgres + redis
+#   docker compose --profile ai up -d      → adiciona o Ollama (embeddings locais)
+#   docker compose --profile voice up -d   → adiciona Whisper + Piper (modo conversa)
+#
+# Sem Adminer: quem usa DBeaver (ou outro cliente) aponta direto para
+# localhost:5433 com o usuário/senha do .env — não precisa de mais um serviço
+# web só para isso.
+#
+# O servidor do IA_Coder roda FORA do Docker, direto no Windows: ele precisa dar
+# spawn no PowerShell da sua máquina e enxergar seus repositórios. Container Linux
+# não faz isso. Veja docs/DOCKER.md.
+
+name: ia_coder
+
+services:
+  # ---------------------------------------------------------------- Postgres
+  # Guarda tudo: sessões, workflows, blocos, logs, artefatos, histórico das setas
+  # e o grafo do Tree — com embeddings (pgvector) para ligar assuntos por sentido,
+  # não só por referência explícita.
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: ia_coder_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-iacoder}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-iacoder}
+      POSTGRES_DB: ${POSTGRES_DB:-iacoder}
+      # Locale pt-BR para ordenação/acentuação coerente nas buscas de texto.
+      POSTGRES_INITDB_ARGS: '--encoding=UTF8'
+      TZ: ${TZ:-America/Cuiaba}
+    ports:
+      - '${POSTGRES_PORT:-5433}:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Rodam UMA vez, na criação do volume. Para reaplicar: docker compose down -v
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-iacoder} -d ${POSTGRES_DB:-iacoder}']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    shm_size: 256mb
+    command:
+      - postgres
+      - -c
+      - max_connections=100
+      - -c
+      - shared_buffers=256MB
+      # HNSW gosta de memória de manutenção na hora de construir o índice.
+      - -c
+      - maintenance_work_mem=256MB
+
+  # ------------------------------------------------------------------- Redis
+  # Barramento de eventos entre os agentes e o gateway WebSocket, e fila de
+  # trabalho dos agentes. É o que permite vários agentes rodando em paralelo
+  # publicarem no mesmo workflow sem pisarem uns nos outros.
+  redis:
+    image: redis:7-alpine
+    container_name: ia_coder_redis
+    restart: unless-stopped
+    command: ['redis-server', '--appendonly', 'yes', '--maxmemory', '512mb', '--maxmemory-policy', 'noeviction']
+    ports:
+      - '${REDIS_PORT:-6379}:6379'
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ------------------------------------------------------------------ Ollama
+  # Embeddings locais para o Tree (modelo nomic-embed-text, 768 dimensões).
+  # Só sobe com --profile ai. Depois de subir, baixe o modelo uma vez:
+  #   docker exec -it ia_coder_ollama ollama pull nomic-embed-text
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ia_coder_ollama
+    restart: unless-stopped
+    profiles: ['ai']
+    ports:
+      - '${OLLAMA_PORT:-11434}:11434'
+    volumes:
+      - ollama:/root/.ollama
+    healthcheck:
+      test: ['CMD-SHELL', 'ollama list || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  # ------------------------------------------------------------------ Voz ---
+  # Fala → texto. O reconhecimento do navegador erra feio em termo técnico e
+  # manda seu áudio para fora; o Whisper roda aqui dentro e entende português
+  # de verdade, inclusive "migration", "endpoint" e nomes de arquivo.
+  whisper:
+    image: onerahmet/openai-whisper-asr-webservice:latest
+    container_name: ia_coder_whisper
+    restart: unless-stopped
+    profiles: ['voice']
+    environment:
+      # small equilibra qualidade e CPU. medium é melhor e bem mais lento;
+      # base é mais rápido e erra mais.
+      ASR_MODEL: ${WHISPER_MODEL:-small}
+      ASR_ENGINE: faster_whisper
+      ASR_DEVICE: cpu
+    ports:
+      - '${WHISPER_PORT:-9000}:9000'
+    volumes:
+      - whisper:/root/.cache
+
+  # Texto → fala em pt-BR. Imagem nossa: um POST com texto, um WAV de volta.
+  # A voz (~60 MB) é baixada na primeira execução e fica no volume.
+  piper:
+    build: ./docker/piper
+    image: ia_coder/piper:latest
+    container_name: ia_coder_piper
+    restart: unless-stopped
+    profiles: ['voice']
+    environment:
+      PIPER_VOICE: ${PIPER_VOICE:-pt_BR-faber-medium}
+    ports:
+      - '${PIPER_PORT:-5002}:5000'
+    volumes:
+      - piper:/voices
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+volumes:
+  pgdata:
+  redisdata:
+  ollama:
+  whisper:
+  piper:

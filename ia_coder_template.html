@@ -1,0 +1,938 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IA_Coder — Orquestrador de Agentes</title>
+<style>
+:root{
+  --bg:#04060c;
+  --bg2:#070b16;
+  --panel:rgba(12,18,32,.72);
+  --panel-2:rgba(9,14,26,.85);
+  --line:rgba(90,190,255,.16);
+  --line-hot:rgba(120,220,255,.55);
+  --txt:#d7e6f5;
+  --txt-dim:#7d92ab;
+  --cy:#22d3ee;
+  --vi:#a855f7;
+  --gr:#34d399;
+  --am:#fbbf24;
+  --rd:#fb7185;
+  --mono:"JetBrains Mono","SFMono-Regular",Consolas,"Liberation Mono",monospace;
+  --ui:"Inter",-apple-system,"Segoe UI",Roboto,system-ui,sans-serif;
+  --r:14px;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;background:var(--bg);color:var(--txt);font-family:var(--ui);
+  overflow:hidden;-webkit-font-smoothing:antialiased;
+}
+/* ---------- fundo ---------- */
+.bg{position:fixed;inset:0;z-index:0;pointer-events:none}
+.bg::before{
+  content:"";position:absolute;inset:0;
+  background:
+    radial-gradient(1100px 700px at 12% -10%, rgba(34,211,238,.14), transparent 60%),
+    radial-gradient(900px 600px at 92% 8%, rgba(168,85,247,.13), transparent 60%),
+    radial-gradient(1200px 800px at 50% 120%, rgba(52,211,153,.08), transparent 60%),
+    linear-gradient(180deg,#04060c,#060a14 60%,#04060c);
+}
+.bg::after{
+  content:"";position:absolute;inset:-2px;opacity:.35;
+  background-image:linear-gradient(rgba(90,190,255,.06) 1px,transparent 1px),
+                   linear-gradient(90deg,rgba(90,190,255,.06) 1px,transparent 1px);
+  background-size:46px 46px;
+  mask-image:radial-gradient(ellipse at 50% 40%,#000 30%,transparent 85%);
+  animation:drift 26s linear infinite;
+}
+@keyframes drift{to{background-position:46px 46px,46px 46px}}
+.scan{position:fixed;inset:0;z-index:60;pointer-events:none;
+  background:repeating-linear-gradient(180deg,rgba(255,255,255,.028) 0 1px,transparent 1px 3px);
+  mix-blend-mode:overlay;opacity:.5}
+
+/* ---------- shell ---------- */
+.app{position:relative;z-index:2;height:100vh;display:flex;flex-direction:column;padding:12px 14px 12px;gap:10px}
+.topbar{
+  display:flex;align-items:center;gap:16px;height:46px;flex:0 0 auto;
+  padding:0 14px;border:1px solid var(--line);border-radius:12px;
+  background:linear-gradient(90deg,rgba(12,18,32,.9),rgba(9,14,26,.6));
+  backdrop-filter:blur(14px);
+}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;letter-spacing:.14em;font-size:12.5px}
+.brand .dot{width:9px;height:9px;border-radius:50%;background:var(--cy);box-shadow:0 0 12px var(--cy);animation:beat 2s infinite}
+@keyframes beat{50%{opacity:.35;transform:scale(.75)}}
+.brand span.sub{color:var(--txt-dim);font-weight:500;letter-spacing:.06em}
+.top-metrics{margin-left:auto;display:flex;gap:8px;align-items:center;font-family:var(--mono);font-size:10.5px;color:var(--txt-dim)}
+.chip{
+  padding:5px 10px;border:1px solid var(--line);border-radius:999px;
+  background:rgba(255,255,255,.02);display:flex;align-items:center;gap:7px;white-space:nowrap
+}
+.chip b{color:var(--txt);font-weight:600}
+.led{width:6px;height:6px;border-radius:50%;background:var(--gr);box-shadow:0 0 8px var(--gr)}
+.led.am{background:var(--am);box-shadow:0 0 8px var(--am)}
+.btn-ghost{
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;color:var(--txt-dim);
+  border:1px solid var(--line);background:rgba(255,255,255,.02);border-radius:8px;
+  padding:6px 11px;cursor:pointer;transition:.2s
+}
+.btn-ghost:hover{color:var(--cy);border-color:var(--line-hot);box-shadow:0 0 16px rgba(34,211,238,.18)}
+.btn-ghost.on{color:#04121a;background:linear-gradient(90deg,var(--cy),#7dd3fc);border-color:transparent;font-weight:700}
+
+/* ---------- grid principal ---------- */
+.stage{flex:1;min-height:0;display:grid;grid-template-columns:230px 1fr 330px;gap:12px}
+.col{display:flex;flex-direction:column;gap:12px;min-height:0}
+
+.panel{
+  position:relative;border:1px solid var(--line);border-radius:var(--r);
+  background:var(--panel);backdrop-filter:blur(16px);
+  display:flex;flex-direction:column;min-height:0;
+  box-shadow:0 20px 50px -30px #000, inset 0 1px 0 rgba(255,255,255,.04);
+}
+.panel::before,.panel::after{
+  content:"";position:absolute;width:12px;height:12px;border:1px solid rgba(34,211,238,.5);pointer-events:none
+}
+.panel::before{top:-1px;left:-1px;border-right:0;border-bottom:0;border-radius:var(--r) 0 0 0}
+.panel::after{bottom:-1px;right:-1px;border-left:0;border-top:0;border-radius:0 0 var(--r) 0}
+.p-head{
+  display:flex;align-items:center;gap:8px;padding:9px 12px;flex:0 0 auto;
+  border-bottom:1px solid var(--line);
+}
+.p-head h2{
+  margin:0;font-size:10px;letter-spacing:.22em;font-weight:700;color:#9fd7ee;text-transform:uppercase;
+  text-shadow:0 0 14px rgba(34,211,238,.35)
+}
+.p-head .count{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--txt-dim)}
+.p-body{padding:10px;overflow:auto;min-height:0;flex:1}
+.p-body::-webkit-scrollbar{width:6px;height:6px}
+.p-body::-webkit-scrollbar-thumb{background:rgba(90,190,255,.22);border-radius:9px}
+
+/* ---------- cards agentes / skills ---------- */
+.card{
+  position:relative;border:1px solid rgba(255,255,255,.07);border-radius:11px;
+  background:linear-gradient(160deg,rgba(255,255,255,.045),rgba(255,255,255,.012));
+  padding:9px 10px;margin-bottom:8px;cursor:pointer;
+  transition:transform .38s cubic-bezier(.2,.9,.25,1),box-shadow .38s,border-color .38s,opacity .38s,filter .38s;
+  display:flex;gap:9px;align-items:center;
+}
+.card:last-child{margin-bottom:0}
+.card .av{
+  width:30px;height:30px;flex:0 0 auto;border-radius:9px;display:grid;place-items:center;
+  font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:.04em;
+  color:#04121a;background:var(--c,#22d3ee);box-shadow:0 0 0 1px rgba(255,255,255,.15) inset
+}
+.card .meta{min-width:0;flex:1}
+.card .nm{font-size:12.5px;font-weight:600;letter-spacing:.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card .rl{font-family:var(--mono);font-size:9.5px;color:var(--txt-dim);letter-spacing:.04em;margin-top:2px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card .pulse{
+  position:absolute;right:8px;top:8px;width:6px;height:6px;border-radius:50%;
+  background:#3c4c60;transition:.3s
+}
+.stage.focusing .card:not(.active){opacity:.34;filter:saturate(.35) blur(.35px)}
+.card.active{
+  z-index:5;transform:translateX(6px) scale(1.055);
+  border-color:var(--c);
+  background:linear-gradient(160deg,color-mix(in srgb,var(--c) 22%,transparent),rgba(255,255,255,.02));
+  box-shadow:0 0 0 1px color-mix(in srgb,var(--c) 45%,transparent),0 0 34px -6px var(--c),0 18px 40px -22px #000;
+}
+.card.active .pulse{background:var(--c);box-shadow:0 0 10px var(--c);animation:beat 1.1s infinite}
+.card.active::after{
+  content:"";position:absolute;inset:-1px;border-radius:11px;pointer-events:none;
+  border:1px solid color-mix(in srgb,var(--c) 55%,transparent);
+  animation:halo 1.8s ease-out infinite
+}
+@keyframes halo{0%{opacity:.9;transform:scale(1)}100%{opacity:0;transform:scale(1.06)}}
+.card .bar{position:absolute;left:0;bottom:0;height:2px;width:0;background:var(--c);
+  box-shadow:0 0 10px var(--c);transition:width .5s linear;border-radius:0 0 11px 11px}
+
+/* ---------- status ---------- */
+.gauge{display:flex;align-items:center;gap:12px;padding:2px 2px 10px}
+.gauge svg{transform:rotate(-90deg)}
+.gauge .lab{font-family:var(--mono);font-size:9.5px;color:var(--txt-dim);letter-spacing:.08em}
+.gauge .val{font-size:19px;font-weight:700;font-family:var(--mono);color:#eaf6ff}
+.meter{margin-bottom:9px}
+.meter .row{display:flex;justify-content:space-between;font-family:var(--mono);font-size:9.5px;color:var(--txt-dim);margin-bottom:4px;letter-spacing:.05em}
+.meter .row b{color:var(--txt);font-weight:600}
+.track{height:5px;border-radius:9px;background:rgba(255,255,255,.07);overflow:hidden}
+.fill{height:100%;border-radius:9px;background:linear-gradient(90deg,var(--cy),var(--vi));
+  box-shadow:0 0 12px rgba(34,211,238,.5);transition:width .8s cubic-bezier(.3,1,.3,1)}
+.fill.am{background:linear-gradient(90deg,var(--am),#fb923c);box-shadow:0 0 12px rgba(251,191,36,.45)}
+.fill.gr{background:linear-gradient(90deg,var(--gr),#22d3ee);box-shadow:0 0 12px rgba(52,211,153,.45)}
+
+/* ---------- WORKING ---------- */
+.working{display:flex;flex-direction:column;min-height:0}
+.wf-head{padding:11px 14px 10px;border-bottom:1px solid var(--line);flex:0 0 auto;position:relative;overflow:hidden}
+.wf-head .kicker{font-family:var(--mono);font-size:9.5px;letter-spacing:.22em;color:var(--cy);text-transform:uppercase}
+.wf-title{margin:5px 0 0;font-size:15.5px;font-weight:600;line-height:1.35;letter-spacing:.005em}
+.wf-sub{margin-top:7px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-family:var(--mono);font-size:9.5px;color:var(--txt-dim)}
+.tag{padding:3px 8px;border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.02)}
+.tag.hot{border-color:color-mix(in srgb,var(--cy) 50%,transparent);color:#a5f0ff}
+.wf-progress{position:absolute;left:0;bottom:0;height:2px;background:linear-gradient(90deg,var(--cy),var(--vi));width:0;box-shadow:0 0 14px var(--cy);transition:width .6s}
+.blocks{padding:12px;overflow:auto;display:flex;flex-direction:column;gap:12px;flex:1;min-height:0}
+.blocks::-webkit-scrollbar{width:6px}
+.blocks::-webkit-scrollbar-thumb{background:rgba(90,190,255,.22);border-radius:9px}
+
+.block{
+  position:relative;border:1px solid rgba(255,255,255,.08);border-radius:13px;
+  background:linear-gradient(165deg,rgba(255,255,255,.035),rgba(255,255,255,.008));
+  padding:12px 14px 13px;transition:.4s cubic-bezier(.2,.9,.25,1);overflow:hidden;
+}
+.stage.focusing .block:not(.active){opacity:.4;filter:saturate(.4)}
+.block.active{
+  border-color:color-mix(in srgb,var(--c) 60%,transparent);
+  box-shadow:0 0 0 1px color-mix(in srgb,var(--c) 30%,transparent),0 0 46px -14px var(--c),0 24px 60px -34px #000;
+  background:linear-gradient(165deg,color-mix(in srgb,var(--c) 12%,transparent),rgba(255,255,255,.01));
+  transform:translateY(-1px)
+}
+.block.done{opacity:.66}
+.block .sweep{position:absolute;inset:0;pointer-events:none;opacity:0;
+  background:linear-gradient(105deg,transparent 35%,color-mix(in srgb,var(--c) 20%,transparent) 50%,transparent 65%)}
+.block.active .sweep{opacity:1;animation:sweep 2.6s linear infinite}
+@keyframes sweep{0%{transform:translateX(-60%)}100%{transform:translateX(60%)}}
+.b-head{display:flex;align-items:center;gap:10px}
+.b-av{width:26px;height:26px;border-radius:8px;display:grid;place-items:center;font-family:var(--mono);
+  font-size:9px;font-weight:700;color:#04121a;background:var(--c)}
+.b-title{font-size:12.5px;font-weight:600}
+.b-title small{display:block;font-family:var(--mono);font-size:9.5px;color:var(--txt-dim);font-weight:400;margin-top:2px;letter-spacing:.04em}
+.b-state{margin-left:auto;display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;color:var(--txt-dim);text-transform:uppercase}
+.b-state .led{background:#3c4c60;box-shadow:none}
+.block.active .b-state{color:var(--c)}
+.block.active .b-state .led{background:var(--c);box-shadow:0 0 9px var(--c);animation:beat 1s infinite}
+.block.done .b-state .led{background:var(--gr);box-shadow:0 0 8px var(--gr)}
+.b-skill{
+  margin-top:10px;display:inline-flex;align-items:center;gap:7px;padding:4px 9px;border-radius:8px;
+  border:1px dashed rgba(255,255,255,.14);font-family:var(--mono);font-size:9.5px;color:var(--txt-dim);letter-spacing:.06em
+}
+.block.active .b-skill{border-color:color-mix(in srgb,var(--c) 55%,transparent);color:#dff6ff;
+  background:color-mix(in srgb,var(--c) 10%,transparent)}
+.b-skill .sq{width:5px;height:5px;transform:rotate(45deg);background:currentColor}
+.log{margin-top:10px;font-family:var(--mono);font-size:10.5px;line-height:1.75;color:var(--txt-dim)}
+.log div{display:flex;gap:8px;opacity:0;transform:translateY(4px);animation:pop .35s forwards}
+@keyframes pop{to{opacity:1;transform:none}}
+.log .t{color:#4b6076;flex:0 0 auto}
+.log .ok{color:var(--gr)}
+.log .cur::after{content:"▍";color:var(--c);animation:blink .9s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+.b-bar{margin-top:11px;height:3px;border-radius:9px;background:rgba(255,255,255,.07);overflow:hidden}
+.b-bar i{display:block;height:100%;width:0;background:var(--c);box-shadow:0 0 12px var(--c);transition:width .45s linear}
+.b-files{margin-top:9px;display:flex;flex-wrap:wrap;gap:6px}
+.file{font-family:var(--mono);font-size:9px;padding:3px 7px;border-radius:6px;border:1px solid var(--line);
+  color:var(--txt-dim);background:rgba(255,255,255,.02)}
+.file.new{border-color:color-mix(in srgb,var(--gr) 45%,transparent);color:#9df3d0}
+
+/* ---------- caixa de texto / voz ---------- */
+.prompt-wrap{padding:11px}
+.voice{
+  position:relative;height:74px;border-radius:11px;border:1px solid var(--line);overflow:hidden;padding-bottom:14px;
+  background:radial-gradient(120% 140% at 50% 120%,rgba(34,211,238,.16),transparent 70%),rgba(255,255,255,.02);
+  display:flex;align-items:center;justify-content:center;gap:3px;margin-bottom:10px;cursor:pointer;transition:.3s
+}
+.voice:hover{border-color:var(--line-hot)}
+.voice.rec{border-color:color-mix(in srgb,var(--rd) 60%,transparent);
+  background:radial-gradient(120% 140% at 50% 120%,rgba(251,113,133,.22),transparent 70%),rgba(255,255,255,.02)}
+.voice .barz{width:3px;border-radius:3px;background:linear-gradient(180deg,var(--cy),var(--vi));height:8px;
+  transition:height .12s linear;opacity:.85}
+.voice.rec .barz{background:linear-gradient(180deg,#fb7185,#f472b6)}
+.voice .hint{position:absolute;bottom:5px;left:0;right:0;text-align:center;font-family:var(--mono);font-size:8.5px;
+  letter-spacing:.16em;color:var(--txt-dim);text-transform:uppercase;pointer-events:none;
+  text-shadow:0 0 8px #04060c,0 0 6px #04060c}
+.voice.rec .hint{color:#ffd9df}
+textarea{
+  width:100%;min-height:98px;resize:none;border-radius:11px;padding:11px 12px;
+  border:1px solid var(--line);background:rgba(4,8,16,.6);color:var(--txt);
+  font-family:var(--mono);font-size:11.5px;line-height:1.65;outline:none;transition:.25s
+}
+textarea:focus{border-color:var(--line-hot);box-shadow:0 0 0 3px rgba(34,211,238,.08)}
+textarea::placeholder{color:#4e6178}
+.prompt-actions{display:flex;gap:8px;margin-top:9px;align-items:center}
+.run{
+  flex:1;border:0;border-radius:10px;padding:10px 12px;cursor:pointer;font-weight:700;font-size:11.5px;
+  letter-spacing:.14em;text-transform:uppercase;color:#04121a;
+  background:linear-gradient(90deg,var(--cy),#818cf8 60%,var(--vi));
+  box-shadow:0 0 26px -6px rgba(34,211,238,.65);transition:.25s
+}
+.run:hover{filter:brightness(1.12);box-shadow:0 0 34px -4px rgba(34,211,238,.9)}
+.mini{width:38px;height:38px;border-radius:10px;border:1px solid var(--line);background:rgba(255,255,255,.02);
+  color:var(--txt-dim);cursor:pointer;display:grid;place-items:center;transition:.25s;font-size:14px}
+.mini:hover{color:var(--cy);border-color:var(--line-hot)}
+.mini.on{color:#04121a;background:linear-gradient(135deg,var(--gr),var(--cy));border-color:transparent}
+.answer{
+  margin-top:10px;border-left:2px solid var(--vi);padding:8px 10px;border-radius:0 9px 9px 0;
+  background:linear-gradient(90deg,rgba(168,85,247,.12),transparent);font-size:11.5px;line-height:1.6;color:#e6d9ff;
+  display:none
+}
+.answer.show{display:block;animation:pop .4s}
+.answer .spk{font-family:var(--mono);font-size:9px;letter-spacing:.16em;color:var(--vi);text-transform:uppercase;display:block;margin-bottom:4px}
+
+/* ---------- tree ---------- */
+.tree-wrap{position:relative;flex:1;min-height:150px}
+#tree{width:100%;height:100%;display:block}
+.tree-tip{position:absolute;pointer-events:none;font-family:var(--mono);font-size:9.5px;padding:4px 8px;
+  border-radius:7px;border:1px solid var(--line-hot);background:rgba(4,10,20,.92);color:#cdefff;opacity:0;transition:.15s}
+
+/* ---------- archives ---------- */
+.arc{display:flex;align-items:center;gap:9px;padding:7px 9px;border-radius:9px;border:1px solid transparent;
+  cursor:pointer;transition:.2s}
+.arc:hover{border-color:var(--line);background:rgba(255,255,255,.035);transform:translateX(3px)}
+.arc .ic{width:24px;height:24px;border-radius:7px;display:grid;place-items:center;font-size:11px;
+  border:1px solid var(--line);background:rgba(255,255,255,.03)}
+.arc .nm{font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.arc .tm{margin-left:auto;font-family:var(--mono);font-size:9px;color:#4b6076}
+
+/* ---------- wires ---------- */
+#wires{position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:40;pointer-events:none;overflow:visible}
+.wire-g{opacity:0;transition:opacity .45s ease}
+.wire-g.in{opacity:1}
+.wire-core{fill:none;stroke-width:1.6;stroke-linecap:round;
+  stroke-dasharray:7 9;animation:flow 1.1s linear infinite}
+@keyframes flow{to{stroke-dashoffset:-32}}
+.wire-glow{fill:none;stroke-width:6;opacity:.16;filter:blur(4px)}
+.wire-comet{filter:drop-shadow(0 0 6px currentColor)}
+.wire-lab{font-family:var(--mono);font-size:8.5px;letter-spacing:.14em;text-transform:uppercase;
+  paint-order:stroke;stroke:#04060c;stroke-width:3.2px;stroke-linejoin:round}
+
+@media (max-width:1180px){
+  .stage{grid-template-columns:200px 1fr 290px}
+}
+</style>
+</head>
+<body>
+<div class="bg"></div>
+<div class="scan"></div>
+
+<div class="app">
+
+  <!-- ============ TOPBAR ============ -->
+  <header class="topbar">
+    <div class="brand"><i class="dot"></i>IA_CODER <span class="sub">// ORQUESTRADOR DE AGENTES</span></div>
+    <div class="top-metrics">
+      <div class="chip"><i class="led"></i> RUNTIME <b id="mRuntime">ONLINE</b></div>
+      <div class="chip">LAT <b id="mLat">38 ms</b></div>
+      <div class="chip">PS <b>powershell -nop -w hidden</b></div>
+      <div class="chip">SESSÃO <b id="mClock">00:00:00</b></div>
+      <button class="btn-ghost on" id="btnDemo">◼ DEMO ON</button>
+      <button class="btn-ghost" id="btnWires">⇋ SETAS</button>
+    </div>
+  </header>
+
+  <!-- ============ STAGE ============ -->
+  <div class="stage" id="stage">
+
+    <!-- ---------- COLUNA ESQUERDA ---------- -->
+    <div class="col">
+
+      <section class="panel" style="flex:0 0 auto">
+        <div class="p-head"><h2>Agents</h2><span class="count" id="cAgents">0 ativos</span></div>
+        <div class="p-body" id="agentList"></div>
+      </section>
+
+      <section class="panel" style="flex:1 1 auto">
+        <div class="p-head"><h2>Skill</h2><span class="count" id="cSkills">0 em uso</span></div>
+        <div class="p-body" id="skillList"></div>
+      </section>
+
+      <section class="panel" style="flex:0 0 auto">
+        <div class="p-head"><h2>Status</h2><span class="count">plano PRO</span></div>
+        <div class="p-body">
+          <div class="gauge">
+            <svg width="58" height="58" viewBox="0 0 58 58">
+              <circle cx="29" cy="29" r="24" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="5"/>
+              <circle id="gArc" cx="29" cy="29" r="24" fill="none" stroke="url(#gg)" stroke-width="5"
+                      stroke-linecap="round" stroke-dasharray="151" stroke-dashoffset="151"/>
+              <defs><linearGradient id="gg" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#22d3ee"/><stop offset="1" stop-color="#a855f7"/>
+              </linearGradient></defs>
+            </svg>
+            <div>
+              <div class="lab">CONSUMO DA SESSÃO</div>
+              <div class="val" id="gVal">0%</div>
+            </div>
+          </div>
+          <div class="meter">
+            <div class="row"><span>LIMITE DO PLANO</span><b id="mPlan">18.4k / 200k</b></div>
+            <div class="track"><i class="fill" id="fPlan" style="width:9%"></i></div>
+          </div>
+          <div class="meter">
+            <div class="row"><span>JANELA DE CONTEXTO</span><b id="mCtx">31%</b></div>
+            <div class="track"><i class="fill gr" id="fCtx" style="width:31%"></i></div>
+          </div>
+          <div class="meter" style="margin-bottom:0">
+            <div class="row"><span>CUSTO ESTIMADO</span><b id="mCost">US$ 0,42</b></div>
+            <div class="track"><i class="fill am" id="fCost" style="width:14%"></i></div>
+          </div>
+        </div>
+      </section>
+
+    </div>
+
+    <!-- ---------- WORKING ---------- -->
+    <section class="panel working">
+      <div class="wf-head">
+        <div class="kicker">Workflow ativo · WF-2026-0831</div>
+        <h1 class="wf-title" id="wfTitle">Criar módulo de autenticação com JWT no backend e tela de login em React</h1>
+        <div class="wf-sub">
+          <span class="tag hot" id="wfState">◈ EXECUTANDO</span>
+          <span class="tag" id="wfAgents">3 agentes</span>
+          <span class="tag" id="wfSteps">etapa 1/6</span>
+          <span class="tag" id="wfEta">ETA 02:40</span>
+        </div>
+        <i class="wf-progress" id="wfBar"></i>
+      </div>
+      <div class="blocks" id="blocks"></div>
+    </section>
+
+    <!-- ---------- COLUNA DIREITA ---------- -->
+    <div class="col">
+
+      <section class="panel" style="flex:0 0 auto">
+        <div class="p-head"><h2>Caixa de Texto</h2><span class="count" id="vState">voz pronta</span></div>
+        <div class="prompt-wrap">
+          <div class="voice" id="voice">
+            <span class="hint" id="vHint">◉ CLIQUE OU SEGURE ESPAÇO PARA FALAR</span>
+          </div>
+          <textarea id="ta" placeholder="Descreva o que você quer construir…&#10;Ex.: crie o CRUD de clientes em C# e a tela em React"></textarea>
+          <div class="prompt-actions">
+            <button class="run" id="btnRun">▶ Executar workflow</button>
+            <button class="mini on" id="btnTts" title="Resposta falada">🔊</button>
+            <button class="mini" id="btnClear" title="Limpar">✕</button>
+          </div>
+          <div class="answer" id="answer"><span class="spk">IA_CODER RESPONDE</span><span id="answerTxt"></span></div>
+        </div>
+      </section>
+
+      <section class="panel" style="flex:1 1 auto;min-height:170px">
+        <div class="p-head"><h2>Tree</h2><span class="count">contexto vinculado</span></div>
+        <div class="tree-wrap">
+          <canvas id="tree"></canvas>
+          <div class="tree-tip" id="treeTip"></div>
+        </div>
+      </section>
+
+      <section class="panel" style="flex:0 0 auto;max-height:206px">
+        <div class="p-head"><h2>Archives</h2><span class="count" id="cArc">0</span></div>
+        <div class="p-body" id="arcList"></div>
+      </section>
+
+    </div>
+  </div>
+</div>
+
+<svg id="wires"></svg>
+<script>
+/* =====================================================================
+   IA_CODER — TEMPLATE DE VALIDAÇÃO
+   Tudo aqui é simulação visual (mock). Nenhuma chamada real ao PowerShell.
+   ===================================================================== */
+const $  = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+
+/* ---------------- DADOS ---------------- */
+const AGENTS = [
+  {id:'be1', nm:'Backend1',    rl:'API · DOMÍNIO · EF',   av:'BE', c:'#22d3ee'},
+  {id:'fe',  nm:'Frontend',    rl:'UI · UX · REACT',      av:'FE', c:'#a855f7'},
+  {id:'qa',  nm:'QA-Sentinel', rl:'TESTES · REGRESSÃO',   av:'QA', c:'#34d399'},
+  {id:'ops', nm:'DevOps',      rl:'BUILD · PIPELINE',     av:'OP', c:'#fbbf24'}
+];
+const SKILLS = [
+  {id:'csharp',   nm:'C#',          rl:'.NET 8 · MINIMAL API', av:'C#', c:'#22d3ee'},
+  {id:'react',    nm:'React',       rl:'VITE · TS · TAILWIND', av:'RE', c:'#a855f7'},
+  {id:'sql',      nm:'SQL Server',  rl:'MIGRATIONS · INDEX',   av:'SQ', c:'#38bdf8'},
+  {id:'test',     nm:'xUnit',       rl:'UNIT · INTEGRAÇÃO',    av:'XU', c:'#34d399'},
+  {id:'docker',   nm:'Docker',      rl:'COMPOSE · CI',         av:'DK', c:'#fbbf24'}
+];
+const ARCHIVES = [
+  {ic:'📄', nm:'arquitetura-auth.md',   tm:'agora'},
+  {ic:'🖼️', nm:'diagrama-fluxo.png',    tm:'2 min'},
+  {ic:'📊', nm:'plano-sprint.pptx',     tm:'11 min'},
+  {ic:'📄', nm:'contrato-api.md',       tm:'18 min'},
+  {ic:'🧩', nm:'schema.prisma',         tm:'26 min'}
+];
+
+/* Roteiro do workflow (mock) */
+const SCRIPT = [
+  {ag:'be1', sk:'csharp', act:'Modelando entidades User e RefreshToken',
+   logs:['scaffold Domain/Entities/User.cs','validando invariantes do agregado','✓ entidade User criada'], files:['User.cs','RefreshToken.cs']},
+  {ag:'be1', sk:'sql',    act:'Gerando migration e índices únicos',
+   logs:['dotnet ef migrations add AddIdentity','índice UX_User_Email aplicado','✓ migration ok'], files:['20260830_AddIdentity.sql']},
+  {ag:'fe',  sk:'react',  act:'Construindo tela de login e store de sessão',
+   logs:['criando <LoginForm/> com react-hook-form','ligando authStore ao endpoint /auth/token','✓ rota /login publicada'], files:['LoginForm.tsx','authStore.ts']},
+  {ag:'qa',  sk:'test',   act:'Escrevendo testes de autenticação',
+   logs:['12 casos de borda mapeados','executando suíte xUnit…','✓ 12/12 verdes'], files:['AuthTests.cs']},
+  {ag:'ops', sk:'docker', act:'Publicando pipeline e imagem',
+   logs:['docker build -t iacoder/api:0.4','push para o registry interno','✓ pipeline verde'], files:['Dockerfile','ci.yml']},
+  {ag:'be1', sk:'csharp', act:'Revisão final e handoff do contrato',
+   logs:['gerando OpenAPI 3.1','✓ contrato sincronizado com o Frontend'], files:['openapi.json']}
+];
+
+/* ---------------- RENDER ---------------- */
+const agentEl = {}, skillEl = {}, blockEl = {};
+
+function card(o, store){
+  const d = document.createElement('div');
+  d.className = 'card'; d.style.setProperty('--c', o.c); d.dataset.id = o.id;
+  d.innerHTML = `<div class="av">${o.av}</div>
+    <div class="meta"><div class="nm">${o.nm}</div><div class="rl">${o.rl}</div></div>
+    <i class="pulse"></i><i class="bar"></i>`;
+  store[o.id] = d;
+  return d;
+}
+AGENTS.forEach(a => $('#agentList').appendChild(card(a, agentEl)));
+SKILLS.forEach(s => $('#skillList').appendChild(card(s, skillEl)));
+
+function renderArchives(){
+  const el = $('#arcList'); el.innerHTML = '';
+  ARCHIVES.forEach(a=>{
+    const d = document.createElement('div');
+    d.className='arc';
+    d.innerHTML = `<div class="ic">${a.ic}</div><div class="nm">${a.nm}</div><div class="tm">${a.tm}</div>`;
+    el.appendChild(d);
+  });
+  $('#cArc').textContent = ARCHIVES.length + ' artefatos';
+}
+renderArchives();
+
+/* Blocos do WORKING: 1 por agente participante */
+function buildBlocks(){
+  const el = $('#blocks'); el.innerHTML = ''; Object.keys(blockEl).forEach(k=>delete blockEl[k]);
+  const order = [...new Set(SCRIPT.map(s=>s.ag))];
+  order.forEach((id,i)=>{
+    const a = AGENTS.find(x=>x.id===id);
+    const d = document.createElement('div');
+    d.className='block'; d.style.setProperty('--c', a.c); d.dataset.id=id;
+    d.innerHTML = `<i class="sweep"></i>
+      <div class="b-head">
+        <div class="b-av">${a.av}</div>
+        <div class="b-title">Agent ${i+1} · ${a.nm}<small class="act">aguardando alocação…</small></div>
+        <div class="b-state"><i class="led"></i><span class="st">na fila</span></div>
+      </div>
+      <div class="b-skill"><i class="sq"></i><span class="sk">skill não atribuída</span></div>
+      <div class="log"></div>
+      <div class="b-files"></div>
+      <div class="b-bar"><i></i></div>`;
+    el.appendChild(d); blockEl[id]=d;
+  });
+  $('#wfAgents').textContent = order.length + ' agentes';
+  $('#cAgents').textContent  = order.length + ' alocados';
+}
+buildBlocks();
+
+/* ---------------- MOTOR DE SETAS (WIRES) ---------------- */
+const NS = 'http://www.w3.org/2000/svg';
+const wiresSvg = $('#wires');
+let wiresOn = true;
+const liveWires = [];
+
+function anchor(el, side){
+  const r = el.getBoundingClientRect();
+  if(side==='r') return {x:r.right, y:r.top + r.height/2};
+  if(side==='l') return {x:r.left,  y:r.top + r.height/2};
+  if(side==='t') return {x:r.left + r.width/2, y:r.top};
+  return {x:r.left + r.width/2, y:r.bottom};
+}
+function pathD(a,b,bow){
+  const dx = b.x-a.x, dy = b.y-a.y;
+  if((bow !== undefined && bow !== null) || Math.abs(dx) < 90){   // arco lateral
+    const off = (bow===undefined||bow===null) ? -70 : bow;
+    const cx = (a.x+b.x)/2 + off;
+    return `M${a.x},${a.y} C${cx},${a.y+dy*0.18} ${cx},${b.y-dy*0.30} ${b.x},${b.y}`;
+  }
+  const k = Math.min(Math.abs(dx)*0.55, 190);
+  return `M${a.x},${a.y} C${a.x+k},${a.y} ${b.x-k},${b.y} ${b.x},${b.y}`;
+}
+
+function drawWire(fromEl, toEl, opt={}){
+  if(!wiresOn || !fromEl || !toEl) return null;
+  const color = opt.color || '#22d3ee';
+  const g = document.createElementNS(NS,'g'); g.setAttribute('class','wire-g');
+  const d = pathD(anchor(fromEl, opt.from||'r'), anchor(toEl, opt.to||'l'), opt.bow);
+
+  const glow = document.createElementNS(NS,'path');
+  glow.setAttribute('class','wire-glow'); glow.setAttribute('d',d); glow.setAttribute('stroke',color);
+
+  const core = document.createElementNS(NS,'path');
+  core.setAttribute('class','wire-core'); core.setAttribute('d',d); core.setAttribute('stroke',color);
+
+  const head = document.createElementNS(NS,'path');   // ponta de seta
+  head.setAttribute('fill',color); head.setAttribute('opacity','.95');
+  head.setAttribute('d','M0,0 L-9,-4.2 L-6.6,0 L-9,4.2 Z');
+
+  const comet = document.createElementNS(NS,'circle');
+  comet.setAttribute('r','3'); comet.setAttribute('fill',color);
+  comet.setAttribute('class','wire-comet'); comet.style.color = color;
+
+  let lab=null;
+  if(opt.label){
+    lab = document.createElementNS(NS,'text');
+    lab.setAttribute('class','wire-lab'); lab.setAttribute('fill',color);
+    lab.setAttribute('opacity','.8'); lab.textContent = opt.label;
+  }
+  g.append(glow, core, head, comet); if(lab) g.appendChild(lab);
+  wiresSvg.appendChild(g);
+  requestAnimationFrame(()=>g.classList.add('in'));
+
+  const w = {g, glow, core, head, comet, lab, fromEl, toEl, opt, color, t:0, alive:true};
+  // posiciona a ponta da seta no fim do path
+  const place = ()=>{
+    const L = core.getTotalLength();
+    const p = core.getPointAtLength(L), q = core.getPointAtLength(Math.max(0,L-6));
+    const ang = Math.atan2(p.y-q.y, p.x-q.x)*180/Math.PI;
+    head.setAttribute('transform',`translate(${p.x},${p.y}) rotate(${ang})`);
+    if(lab){ const m = core.getPointAtLength(L*0.5); lab.setAttribute('x',m.x+7); lab.setAttribute('y',m.y-7); }
+  };
+  w.place = place; place();
+  w.refresh = ()=>{
+    const nd = pathD(anchor(w.fromEl, w.opt.from||'r'), anchor(w.toEl, w.opt.to||'l'), w.opt.bow);
+    glow.setAttribute('d',nd); core.setAttribute('d',nd); place();
+  };
+  liveWires.push(w);
+  if(opt.ttl) setTimeout(()=>killWire(w), opt.ttl);
+  return w;
+}
+function killWire(w){
+  if(!w || !w.alive) return; w.alive=false;
+  w.g.classList.remove('in');
+  setTimeout(()=>{ w.g.remove(); const i=liveWires.indexOf(w); if(i>=0) liveWires.splice(i,1); }, 480);
+}
+function clearWires(){ [...liveWires].forEach(killWire); }
+
+/* cometa percorrendo os fios + reposicionamento em scroll/resize */
+(function cometLoop(){
+  const t = performance.now()/1000;
+  liveWires.forEach(w=>{
+    if(!w.alive) return;
+    try{
+      const L = w.core.getTotalLength();
+      const p = w.core.getPointAtLength(((t*0.55 + (w.seed||0)) % 1) * L);
+      w.comet.setAttribute('cx',p.x); w.comet.setAttribute('cy',p.y);
+    }catch(e){}
+  });
+  requestAnimationFrame(cometLoop);
+})();
+const refreshAll = ()=>liveWires.forEach(w=>w.alive && w.refresh());
+window.addEventListener('resize', refreshAll);
+$('#blocks').addEventListener('scroll', refreshAll);
+$('#agentList').addEventListener('scroll', refreshAll);
+$('#skillList').addEventListener('scroll', refreshAll);
+
+/* ---------------- MOTOR DO WORKFLOW ---------------- */
+const stage = $('#stage');
+let step = -1, running = false, demo = true, timers = [];
+const clearTimers = ()=>{ timers.forEach(clearTimeout); timers = []; };
+const later = (fn,ms)=>{ const t=setTimeout(fn,ms); timers.push(t); return t; };
+const stamp = ()=> new Date().toLocaleTimeString('pt-BR',{hour12:false});
+
+function resetFocus(){
+  stage.classList.remove('focusing');
+  $$('.card.active,.block.active').forEach(e=>e.classList.remove('active'));
+}
+
+function typeInto(node, text, done){
+  node.textContent=''; node.classList.add('cur');
+  let i=0;
+  (function tick(){
+    if(i<=text.length){ node.textContent = text.slice(0,i++); later(tick, 14); }
+    else { node.classList.remove('cur'); done && done(); }
+  })();
+}
+
+function runStep(i){
+  const s = SCRIPT[i]; if(!s) return finishFlow();
+  const ag = AGENTS.find(a=>a.id===s.ag), sk = SKILLS.find(k=>k.id===s.sk);
+  const aCard = agentEl[s.ag], sCard = skillEl[s.sk], blk = blockEl[s.ag];
+
+  clearWires();
+  resetFocus();
+  stage.classList.add('focusing');
+
+  /* 1º plano: agente + skill + bloco */
+  aCard.classList.add('active'); sCard.classList.add('active'); blk.classList.add('active');
+  blk.classList.remove('done');
+  aCard.scrollIntoView({block:'nearest'}); sCard.scrollIntoView({block:'nearest'});
+  blk.scrollIntoView({block:'nearest', behavior:'smooth'});
+
+  /* setas: agente → bloco (o que está fazendo) e agente → skill (o que está usando) */
+  later(()=>{
+    drawWire(aCard, blk,   {color:ag.c, from:'r', to:'l', label:'executa'});
+    drawWire(aCard, sCard, {color:sk.c, from:'b', to:'t', bow:-58, label:'usa '+sk.nm});
+  }, 260);
+
+  /* estado do bloco */
+  blk.querySelector('.st').textContent = 'executando';
+  blk.querySelector('.sk').textContent = 'skill: ' + sk.nm + ' — ' + sk.rl.toLowerCase();
+  typeInto(blk.querySelector('.act'), s.act);
+
+  const log = blk.querySelector('.log'); log.innerHTML='';
+  const files = blk.querySelector('.b-files');
+  const bar = blk.querySelector('.b-bar i'); bar.style.width='0%';
+  const aBar = aCard.querySelector('.bar'); aBar.style.width='0%';
+
+  s.logs.forEach((l,k)=>{
+    later(()=>{
+      const d = document.createElement('div');
+      d.innerHTML = `<span class="t">${stamp()}</span><span class="${l.startsWith('✓')?'ok':''}">${l}</span>`;
+      log.appendChild(d); log.scrollTop = log.scrollHeight;
+      const pct = Math.round((k+1)/s.logs.length*100);
+      bar.style.width = pct+'%'; aBar.style.width = pct+'%';
+      refreshAll();
+    }, 700 + k*820);
+  });
+  later(()=>{
+    files.innerHTML = s.files.map(f=>`<span class="file new">＋ ${f}</span>`).join('');
+    refreshAll();
+  }, 700 + s.logs.length*820);
+
+  /* progresso global */
+  $('#wfSteps').textContent = `etapa ${i+1}/${SCRIPT.length}`;
+  $('#wfBar').style.width = ((i+1)/SCRIPT.length*100)+'%';
+  const eta = Math.max(0, (SCRIPT.length-i-1)*32);
+  $('#wfEta').textContent = 'ETA ' + String(Math.floor(eta/60)).padStart(2,'0') + ':' + String(eta%60).padStart(2,'0');
+  bumpStatus();
+
+  const dur = 1500 + s.logs.length*820;
+  later(()=>{
+    blk.classList.add('done');
+    blk.querySelector('.st').textContent = 'concluído';
+    aBar.style.width='100%';
+    step = i+1;
+    if(running) later(()=>runStep(step), 600);
+  }, dur);
+}
+
+function finishFlow(){
+  running = false; clearWires(); resetFocus();
+  $('#wfState').textContent = '✓ CONCLUÍDO';
+  $('#wfBar').style.width='100%';
+  $('#wfEta').textContent = 'ETA 00:00';
+  say('Workflow concluído. Seis etapas executadas por quatro agentes, sem erros.');
+  showAnswer('Workflow concluído — 6 etapas, 4 agentes, 9 artefatos gerados. Nenhum erro na suíte de testes.');
+  if(demo) later(()=>startFlow(), 4200);
+}
+
+function startFlow(title){
+  clearTimers(); clearWires();
+  if(title) $('#wfTitle').textContent = title;
+  buildBlocks();
+  $('#wfState').textContent = '◈ EXECUTANDO';
+  running = true; step = 0;
+  later(()=>runStep(0), 500);
+}
+
+/* ---------------- STATUS ---------------- */
+let used = 18.4;
+function bumpStatus(){
+  used += 6 + Math.random()*9;
+  const planPct = Math.min(100, used/200*100);
+  $('#mPlan').textContent = used.toFixed(1)+'k / 200k';
+  $('#fPlan').style.width = planPct+'%';
+  const ctx = Math.min(97, 31 + step*7);
+  $('#mCtx').textContent = ctx+'%'; $('#fCtx').style.width = ctx+'%';
+  const cost = (used*0.023).toFixed(2).replace('.',',');
+  $('#mCost').textContent = 'US$ '+cost; $('#fCost').style.width = Math.min(100, used/200*100*1.4)+'%';
+  const C = 151, pct = planPct/100;
+  $('#gArc').setAttribute('stroke-dashoffset', C - C*pct);
+  $('#gVal').textContent = Math.round(planPct)+'%';
+  $('#cSkills').textContent = (SCRIPT[step]?1:0)+' em uso';
+}
+const t0 = Date.now();
+setInterval(()=>{
+  const s = Math.floor((Date.now()-t0)/1000);
+  $('#mClock').textContent = [s/3600, s/60%60, s%60].map(v=>String(Math.floor(v)).padStart(2,'0')).join(':');
+  $('#mLat').textContent = (28+Math.floor(Math.random()*26))+' ms';
+}, 1000);
+bumpStatus();
+
+/* ---------------- VOZ: entrada (STT) ---------------- */
+const voice = $('#voice'), vHint = $('#vHint'), ta = $('#ta');
+const bars = [];
+for(let i=0;i<28;i++){ const b=document.createElement('i'); b.className='barz'; voice.appendChild(b); bars.push(b); }
+let recording = false, waveRAF = null;
+
+function wave(){
+  const t = performance.now()/170;
+  bars.forEach((b,i)=>{
+    const amp = recording ? 26 : 7;
+    const h = 5 + Math.abs(Math.sin(t + i*0.42)) * amp * (recording?(0.5+Math.random()*0.7):1);
+    b.style.height = h.toFixed(1)+'px';
+  });
+  waveRAF = requestAnimationFrame(wave);
+}
+wave();
+
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null;
+if(SR){
+  rec = new SR();
+  rec.lang='pt-BR'; rec.continuous=true; rec.interimResults=true;
+  let base='';
+  rec.onstart = ()=>{ base = ta.value ? ta.value.trim()+' ' : ''; };
+  rec.onresult = e=>{
+    let txt='';
+    for(let i=e.resultIndex;i<e.results.length;i++) txt += e.results[i][0].transcript;
+    ta.value = base + txt;
+  };
+  rec.onend = ()=>{ if(recording) stopRec(); };
+  rec.onerror = ()=>{ stopRec(); };
+}
+function startRec(){
+  recording = true; voice.classList.add('rec');
+  vHint.textContent = '● OUVINDO… SOLTE PARA ENVIAR';
+  $('#vState').textContent = 'capturando voz';
+  try{ rec && rec.start(); }catch(e){}
+  if(!SR){ vHint.textContent = '● SIMULAÇÃO (SEM API DE VOZ NESTE NAVEGADOR)'; }
+}
+function stopRec(){
+  recording = false; voice.classList.remove('rec');
+  vHint.textContent = '◉ CLIQUE OU SEGURE ESPAÇO PARA FALAR';
+  $('#vState').textContent = 'voz pronta';
+  try{ rec && rec.stop(); }catch(e){}
+}
+voice.addEventListener('click', ()=> recording ? stopRec() : startRec());
+window.addEventListener('keydown', e=>{
+  if(e.code==='Space' && e.target!==ta && !recording){ e.preventDefault(); startRec(); }
+  if(e.code==='Enter' && (e.ctrlKey||e.metaKey)) run();
+});
+window.addEventListener('keyup', e=>{ if(e.code==='Space' && recording && e.target!==ta) stopRec(); });
+
+/* ---------------- VOZ: saída (TTS) ---------------- */
+let ttsOn = true;
+$('#btnTts').addEventListener('click', function(){
+  ttsOn = !ttsOn; this.classList.toggle('on', ttsOn);
+  this.textContent = ttsOn ? '🔊' : '🔇';
+  if(!ttsOn) speechSynthesis.cancel();
+});
+function say(text){
+  if(!ttsOn || !('speechSynthesis' in window)) return;
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang='pt-BR'; u.rate=1.05; u.pitch=1;
+  const v = speechSynthesis.getVoices().find(x=>/pt[-_]BR/i.test(x.lang));
+  if(v) u.voice = v;
+  speechSynthesis.speak(u);
+}
+function showAnswer(txt){
+  $('#answerTxt').textContent = txt;
+  $('#answer').classList.add('show');
+}
+
+/* ---------------- AÇÕES ---------------- */
+function run(){
+  const txt = ta.value.trim();
+  if(!txt){ ta.focus(); return; }
+  demo = false; $('#btnDemo').classList.remove('on'); $('#btnDemo').textContent='◻ DEMO OFF';
+  showAnswer('Entendido. Distribuindo a tarefa entre os agentes e abrindo o workflow — acompanhe os blocos ao lado.');
+  say('Entendido. Vou distribuir essa tarefa entre os agentes e abrir o workflow.');
+  startFlow(txt);
+}
+$('#btnRun').addEventListener('click', run);
+$('#btnClear').addEventListener('click', ()=>{ ta.value=''; $('#answer').classList.remove('show'); });
+$('#btnDemo').addEventListener('click', function(){
+  demo = !demo; this.classList.toggle('on', demo);
+  this.textContent = demo ? '◼ DEMO ON' : '◻ DEMO OFF';
+  if(demo) startFlow();
+});
+$('#btnWires').addEventListener('click', function(){
+  wiresOn = !wiresOn; this.classList.toggle('on', wiresOn);
+  if(!wiresOn) clearWires();
+});
+
+/* hover em um agente mostra as ligações dele */
+Object.entries(agentEl).forEach(([id, el])=>{
+  el.addEventListener('mouseenter', ()=>{
+    if(running) return;
+    const s = SCRIPT.find(x=>x.ag===id); if(!s) return;
+    const ag = AGENTS.find(a=>a.id===id), sk = SKILLS.find(k=>k.id===s.sk);
+    drawWire(el, blockEl[id], {color:ag.c, from:'r', to:'l', ttl:2200, label:'executa'});
+    drawWire(el, skillEl[s.sk], {color:sk.c, from:'b', to:'t', bow:-58, ttl:2200, label:'usa'});
+  });
+});
+
+/* ---------------- TREE (grafo estilo Obsidian) ---------------- */
+const cv = $('#tree'), ctx = cv.getContext('2d'), tip = $('#treeTip');
+const N = [
+  {id:0, t:'auth-jwt',    r:9,  c:'#22d3ee'},
+  {id:1, t:'User',        r:6,  c:'#7dd3fc'},
+  {id:2, t:'RefreshToken',r:5,  c:'#7dd3fc'},
+  {id:3, t:'LoginForm',   r:6,  c:'#a855f7'},
+  {id:4, t:'authStore',   r:5,  c:'#a855f7'},
+  {id:5, t:'AuthTests',   r:5,  c:'#34d399'},
+  {id:6, t:'openapi',     r:6,  c:'#fbbf24'},
+  {id:7, t:'migrations',  r:5,  c:'#38bdf8'},
+  {id:8, t:'pipeline',    r:5,  c:'#fbbf24'}
+];
+const E = [[0,1],[0,3],[0,6],[1,2],[1,7],[3,4],[0,5],[5,1],[6,3],[8,6],[8,7]];
+N.forEach(n=>{ n.x = Math.random()*200+40; n.y = Math.random()*140+30; n.vx=0; n.vy=0; });
+let hover = null;
+
+function sizeCanvas(){
+  const r = cv.parentElement.getBoundingClientRect();
+  cv.width = r.width * devicePixelRatio; cv.height = r.height * devicePixelRatio;
+  cv.style.width = r.width+'px'; cv.style.height = r.height+'px';
+  ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+}
+sizeCanvas(); window.addEventListener('resize', sizeCanvas);
+
+function tickTree(){
+  const W = cv.width/devicePixelRatio, H = cv.height/devicePixelRatio;
+  // repulsão
+  for(let i=0;i<N.length;i++) for(let j=i+1;j<N.length;j++){
+    const a=N[i],b=N[j]; let dx=b.x-a.x, dy=b.y-a.y, d=Math.hypot(dx,dy)||1;
+    const f = 620/(d*d); dx/=d; dy/=d;
+    a.vx-=dx*f; a.vy-=dy*f; b.vx+=dx*f; b.vy+=dy*f;
+  }
+  // molas
+  E.forEach(([i,j])=>{
+    const a=N[i],b=N[j]; let dx=b.x-a.x, dy=b.y-a.y, d=Math.hypot(dx,dy)||1;
+    const f=(d-54)*0.006; dx/=d; dy/=d;
+    a.vx+=dx*f; a.vy+=dy*f; b.vx-=dx*f; b.vy-=dy*f;
+  });
+  N.forEach(n=>{
+    n.vx += (W/2-n.x)*0.0016; n.vy += (H/2-n.y)*0.0016;
+    n.vx*=0.86; n.vy*=0.86; n.x+=n.vx; n.y+=n.vy;
+    n.x = Math.max(16, Math.min(W-16, n.x)); n.y = Math.max(14, Math.min(H-14, n.y));
+  });
+
+  ctx.clearRect(0,0,W,H);
+  const t = performance.now()/1000;
+  E.forEach(([i,j],k)=>{
+    const a=N[i], b=N[j];
+    const lit = hover!==null && (i===hover||j===hover);
+    ctx.strokeStyle = lit ? 'rgba(160,235,255,.75)' : 'rgba(120,190,255,.16)';
+    ctx.lineWidth = lit ? 1.4 : 0.8;
+    ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
+    // pulso viajando no vínculo
+    const p = ((t*0.28 + k*0.13) % 1);
+    ctx.fillStyle = lit ? 'rgba(190,245,255,.95)' : 'rgba(140,220,255,.35)';
+    ctx.beginPath(); ctx.arc(a.x+(b.x-a.x)*p, a.y+(b.y-a.y)*p, lit?1.9:1.2, 0, 7); ctx.fill();
+  });
+  N.forEach(n=>{
+    const lit = hover===n.id;
+    ctx.beginPath(); ctx.arc(n.x,n.y,n.r+(lit?2.5:0),0,7);
+    ctx.fillStyle = n.c; ctx.globalAlpha = lit?1:.85; ctx.fill(); ctx.globalAlpha=1;
+    ctx.shadowColor = n.c; ctx.shadowBlur = lit?18:8;
+    ctx.beginPath(); ctx.arc(n.x,n.y,n.r*0.55,0,7); ctx.fillStyle='rgba(255,255,255,.55)'; ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.font='8.5px ui-monospace,monospace'; ctx.textAlign='center';
+    ctx.fillStyle = lit ? '#eaf9ff' : 'rgba(190,215,235,.55)';
+    ctx.fillText(n.t, n.x, n.y + n.r + 10);
+  });
+  requestAnimationFrame(tickTree);
+}
+tickTree();
+cv.addEventListener('mousemove', e=>{
+  const r = cv.getBoundingClientRect(), mx=e.clientX-r.left, my=e.clientY-r.top;
+  hover = null;
+  N.forEach(n=>{ if(Math.hypot(n.x-mx,n.y-my) < n.r+7) hover=n.id; });
+  if(hover!==null){
+    tip.style.opacity=1; tip.style.left=(mx+12)+'px'; tip.style.top=(my-6)+'px';
+    tip.textContent = N[hover].t + ' · ' + E.filter(([i,j])=>i===hover||j===hover).length + ' vínculos';
+  } else tip.style.opacity=0;
+});
+cv.addEventListener('mouseleave', ()=>{ hover=null; tip.style.opacity=0; });
+
+/* ---------------- BOOT ---------------- */
+later(()=>startFlow(), 800);
+</script>
+</body>
+</html>

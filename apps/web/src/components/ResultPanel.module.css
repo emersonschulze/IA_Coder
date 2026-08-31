@@ -1,0 +1,88 @@
+.wrap {
+  padding: 11px;
+}
+
+.answer {
+  padding: 8px 10px;
+  border-left: 2px solid var(--vi);
+  border-radius: 0 9px 9px 0;
+  background: linear-gradient(90deg, rgba(168, 85, 247, 0.12), transparent);
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: #e6d9ff;
+  animation: pop 0.4s var(--ease);
+}
+.answerLabel {
+  display: block;
+  margin-bottom: 4px;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--vi);
+}
+/* Os arquivos que a execução gerou — clique abre no programa padrão. */
+.artifacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.artifact {
+  padding: 5px 9px;
+  border: 1px solid color-mix(in srgb, var(--cy) 45%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--cy) 10%, transparent);
+  color: #cdefff;
+  font-family: var(--mono);
+  font-size: 10px;
+  cursor: pointer;
+  transition: var(--fast);
+}
+.artifact:hover {
+  background: color-mix(in srgb, var(--cy) 22%, transparent);
+  box-shadow: 0 0 16px -6px var(--cy);
+}
+
+.save {
+  display: block;
+  margin-top: 9px;
+  padding: 6px 11px;
+  border: 1px solid color-mix(in srgb, var(--gr) 50%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--gr) 12%, transparent);
+  color: #9df3d0;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: var(--fast);
+}
+.save:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--gr) 22%, transparent);
+  box-shadow: 0 0 18px -6px var(--gr);
+}
+.save:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+/* Ampliado pela lupa: o resultado vira a área de leitura inteira. */
+:global([data-zoomed]) .wrap {
+  height: 100%;
+  padding: 16px;
+}
+:global([data-zoomed]) .answer {
+  max-height: 100%;
+  overflow: auto;
+  font-size: 13.5px;
+  line-height: 1.75;
+}
