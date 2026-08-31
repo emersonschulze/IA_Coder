@@ -31,6 +31,21 @@ Todo evento tem um campo `type`. Fonte da verdade dos tipos: `apps/web/src/types
 - `agents.sync` — `{ agents }` **catálogo completo**. Sempre mandar todos, inclusive os ociosos.
 - `skills.sync` — `{ skills }` idem para skills.
 
+O catálogo é lido do disco pelo servidor (`apps/server/src/discovery.ts`), não escrito à
+mão: plugins instalados (`~/.claude/plugins/installed_plugins.json`), o `.claude` do
+projeto e o `.claude` pessoal. Cada agente e cada skill de lá traz `source` — o nome do
+plugin, `projeto` ou `pessoal`.
+
+`skills.sync` mistura duas naturezas, separadas por `kind`:
+
+| `kind` | o que é | exemplo |
+|---|---|---|
+| `tool` | grupo de ferramenta do próprio Claude Code; é o que acende a cada passo | `read`, `edit`, `shell` |
+| `skill` | skill instalada de verdade, achada em disco | `auditar-cnpj`, `figma-use` |
+
+Como plugin de escopo `project` só vale na pasta onde foi instalado, **o catálogo muda
+quando o projeto muda** — o servidor revarre e reemite os dois eventos a cada troca.
+
 > Regra de UI: fora de execução a tela exibe **todos** os agentes e skills em brilho pleno.
 > O escurecimento só acontece enquanto há agente com `state: 'working'`.
 

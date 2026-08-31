@@ -26,6 +26,8 @@ export interface Agent {
   progress?: number;
   /** Skill que ele está usando agora. */
   skillId?: string | null;
+  /** De onde ele veio: o nome do plugin, "projeto" ou "pessoal". */
+  source?: string;
 }
 
 export interface Skill {
@@ -35,6 +37,12 @@ export interface Skill {
   initials?: string;
   color: string;
   inUse: boolean;
+  source?: string;
+  /**
+   * "tool" é grupo de ferramentas do Claude Code (leitura, edição…); "skill" é
+   * uma skill instalada de verdade, por plugin ou pelo `.claude`.
+   */
+  kind?: 'tool' | 'skill';
 }
 
 export interface Workflow {

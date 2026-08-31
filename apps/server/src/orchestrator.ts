@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { ClaudeSession, RateLimit, ToolUse, TurnResult } from './claude.js';
 import {
-  MAIN_AGENT, SKILLS, artifactFromTool, describeTool, skillForTool, subAgent, truncate,
+  MAIN_AGENT, SKILLS, artifactFromTool, bareName, describeTool, installedAgent, installedSkill,
+  skillForTool, subAgent, truncate,
 } from './catalog.js';
+import type { DiscoveredCatalog } from './discovery.js';
 import type {
   Agent, Artifact, Block, LogEntry, ServerEvent, Skill, Usage, Workflow,
 } from './protocol.js';
@@ -38,10 +40,21 @@ export class Orchestrator {
   /** Turnos internos (extrair assunto para o Tree) não devem virar bloco na tela. */
   muted = false;
 
+  /** Nome chamado pelo Claude → id do cartão na tela. */
+  private installedAgents = new Map<string, string>();
+  private installedSkills = new Map<string, string>();
+
   /** Último texto que o agente escreveu — vira o resumo falado no fim. */
   private lastText = '';
-  /** O que está sendo feito agora, para o "ainda estou nisso". */
+  /** O que está sendo feito agora — texto técnico, para o log do bloco. */
   currentAction = '';
+  /**
+   * O GRUPO de ferramenta em uso (read, edit, shell…).
+   *
+   * É o que a narração falada usa: dá para dizer "ainda lendo o projeto" sem
+   * recitar o comando, que é log de terminal e não conversa.
+   */
+  currentSkill = '';
 
   constructor(
     private readonly emit: Emit,
@@ -75,6 +88,41 @@ export class Orchestrator {
       updatedAt: Date.now(),
     };
     this.emit({ type: 'usage', usage: this.usage });
+  }
+
+  /**
+   * O catálogo do disco chegou: agentes e skills que existem de verdade nesta
+   * máquina entram na tela ao lado dos grupos de ferramenta.
+   *
+   * Quem já estava na lista mantém o estado — trocar o catálogo no meio de uma
+   * execução não pode apagar o agente que está trabalhando.
+   */
+  setCatalog(catalog: DiscoveredCatalog): void {
+    const keptAgent = new Map(this.agents.map((agent) => [agent.id, agent]));
+    const keptSkill = new Map(this.skills.map((skill) => [skill.id, skill]));
+
+    const discovered = catalog.agents.map(installedAgent);
+    const subagents = this.agents.filter((agent) => agent.id.startsWith('sub:'));
+    this.agents = [
+      keptAgent.get(MAIN_AGENT.id) ?? { ...MAIN_AGENT },
+      ...discovered.map((agent) => keptAgent.get(agent.id) ?? agent),
+      ...subagents,
+    ];
+
+    this.skills = [
+      ...SKILLS.map((skill) => keptSkill.get(skill.id) ?? { ...skill }),
+      ...catalog.skills.map(installedSkill).map((skill) => keptSkill.get(skill.id) ?? skill),
+    ];
+
+    this.installedAgents = new Map(this.agents
+      .filter((agent) => agent.source)
+      .map((agent) => [bareName(agent.name), agent.id]));
+    this.installedSkills = new Map(this.skills
+      .filter((skill) => skill.kind === 'skill')
+      .map((skill) => [bareName(skill.name), skill.id]));
+
+    this.emit({ type: 'agents.sync', agents: this.agents });
+    this.emit({ type: 'skills.sync', skills: this.skills });
   }
 
   syncCatalog(): void {
@@ -147,10 +195,15 @@ export class Orchestrator {
     if (this.muted) return;
     const isDelegation = tool.name === 'Task';
     const agentId = isDelegation
-      ? this.ensureSubAgent(String(tool.input.subagent_type ?? 'agente')).id
+      ? this.agentForDelegation(String(tool.input.subagent_type ?? 'agente'))
       : 'claude';
 
-    const skillId = skillForTool(tool.name);
+    // A skill de verdade, quando ele invoca uma, é mais informativa do que o
+    // grupo de ferramentas — é ela que ganha a seta e o brilho.
+    const invoked = tool.name === 'Skill'
+      ? this.installedSkills.get(bareName(String(tool.input.skill ?? tool.input.name ?? '')))
+      : undefined;
+    const skillId = invoked ?? skillForTool(tool.name);
     const block = this.blockFor(agentId);
     const action = describeTool(tool.name, tool.input);
 
@@ -158,6 +211,7 @@ export class Orchestrator {
     this.setAgentState(agentId, 'working', this.guessProgress());
     this.setSkillInUse(skillId);
     this.currentAction = action;
+    this.currentSkill = skillForTool(tool.name);
     this.patchBlock(block.id, { action, skillId, state: 'running', progress: this.guessProgress() });
     this.log(block.id, 'info', action);
     this.focusLinks(agentId, block.id, skillId, tool.name);
@@ -232,6 +286,7 @@ export class Orchestrator {
     this.workflow = { ...this.workflow, state, progress: 100 };
     this.emit({ type: 'workflow.finished', id: this.workflow.id, state, summary });
     this.currentAction = '';
+    this.currentSkill = '';
     this.hooks.onFinish?.(state, this.lastText);
   }
 
@@ -292,6 +347,17 @@ export class Orchestrator {
         this.emit({ type: 'skill.state', skillId: skill.id, inUse: next });
       }
     });
+  }
+
+  /**
+   * Delegou para quem?
+   *
+   * Se o agente já está no catálogo (veio de um plugin ou do `.claude`), quem
+   * acende é o cartão dele — nada de criar um segundo cartão com o mesmo nome.
+   * Só o que não conhecemos vira subagente novo na tela.
+   */
+  private agentForDelegation(kind: string): string {
+    return this.installedAgents.get(bareName(kind)) ?? this.ensureSubAgent(kind).id;
   }
 
   private ensureSubAgent(kind: string): Agent {

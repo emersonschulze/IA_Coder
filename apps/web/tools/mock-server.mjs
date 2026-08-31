@@ -155,10 +155,13 @@ wss.on('connection', (socket) => {
     if (command.type === 'tree.list') return send({ type: 'tree.subjects', graph: { nodes: [], edges: [] }, status: 'unreachable' });
 
     if (command.type === 'conversation.confirm') {
+      if (!pending) return;
+      // O clique também é fala sua: aparece no chat como qualquer resposta.
+      send({ type: 'conversation.turn', role: 'user', text: command.accept ? 'Pode ir.' : 'Agora não.' });
       if (!command.accept) {
         pending = null;
         publishConversation();
-        agentSays('Beleza, cancelei. O que você prefere?');
+        agentSays('Beleza, deixei de lado. O que você prefere?');
         return;
       }
       const title = pending?.title ?? 'Execução combinada';

@@ -15,9 +15,17 @@ export interface Ref { kind: RefKind; id: string }
 export interface Agent {
   id: string; name: string; role: string; initials?: string; color: string;
   state: AgentState; progress?: number; skillId?: string | null;
+  /** De onde ele veio: o nome do plugin, "projeto" ou "pessoal". */
+  source?: string;
 }
 export interface Skill {
   id: string; name: string; detail: string; initials?: string; color: string; inUse: boolean;
+  source?: string;
+  /**
+   * "tool" é grupo de ferramentas do próprio Claude Code (leitura, edição…);
+   * "skill" é uma skill de verdade, instalada por plugin ou pelo `.claude`.
+   */
+  kind?: 'tool' | 'skill';
 }
 export interface Workflow {
   id: string; title: string; state: WorkflowState;

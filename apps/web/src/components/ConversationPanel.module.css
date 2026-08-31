@@ -1,7 +1,10 @@
 .wrap {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  /* `height: 100%` aqui media a altura do painel INTEIRO, cabeçalho incluso —
+     sobrava sempre a altura do cabeçalho para fora, e era isso que cortava o
+     rodapé. Como item flex, ele ocupa o que sobrou e nada além disso. */
+  flex: 1 1 auto;
   min-height: 0;
   padding: 11px;
 }
@@ -217,10 +220,11 @@
   opacity: 0.6;
 }
 
-/* O plano na mesa, esperando o "pode ir". */
+/* O plano na mesa, esperando o "pode ir" — última bolha da conversa. */
 .plan {
   flex: 0 0 auto;
-  margin-top: 11px;
+  align-self: stretch;
+  margin-top: 5px;
   padding: 11px;
   border: 1px solid color-mix(in srgb, var(--cy) 40%, transparent);
   border-radius: 11px;

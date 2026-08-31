@@ -12,6 +12,8 @@ interface EntityCardProps {
   color: string;
   initials?: string;
   active: boolean;
+  /** Texto completo no `title` — o card só mostra uma linha, com reticências. */
+  hint?: string;
   /** 0..100 — barra fina no rodapé do card. */
   progress?: number;
   onHoverStart?: () => void;
@@ -30,6 +32,7 @@ export function EntityCard({
   color,
   initials,
   active,
+  hint,
   progress = 0,
   onHoverStart,
   onHoverEnd,
@@ -63,6 +66,7 @@ export function EntityCard({
       onMouseEnter={onHoverStart}
       onMouseLeave={onHoverEnd}
       data-entity={`${kind}:${id}`}
+      title={hint}
     >
       <div className={styles.avatar}>{initialsOf(name, initials)}</div>
       <div className={styles.cardMeta}>

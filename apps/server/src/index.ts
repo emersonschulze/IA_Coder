@@ -6,6 +6,7 @@ import {
 import { ClaudeSession } from './claude.js';
 import { config } from './config.js';
 import { closeDb, dbReady, dbState, initDb } from './db.js';
+import { discoverCatalog } from './discovery.js';
 import {
   extractionPrompt, forgetSubject, parseExtraction, recall, recallBlock,
   saveSubject, subjectDetail, subjectGraph,
@@ -23,7 +24,7 @@ import { fetchAccountUsage } from './usage.js';
 const startedAt = Date.now();
 const VERSION = '0.3.0';
 /** Comandos que esta versão entende — anunciados no handshake. */
-const FEATURES = ['project', 'picker', 'tree', 'knowledge'];
+const FEATURES = ['project', 'picker', 'tree', 'knowledge', 'catalog'];
 const clients = new Set<WebSocket>();
 
 const broadcast = (event: ServerEvent): void => {
@@ -47,13 +48,35 @@ const claude = new ClaudeSession(prefs.projectPath);
  *
  * O pedido era "me retorne de forma interativa o que aconteceu" — e o oposto
  * disso é tanto o silêncio quanto a tagarelice. Então: avisa ao começar, dá
- * sinal de vida de vez em quando dizendo o que está fazendo agora, fala se der
- * erro, e no fim lê o resumo. Nada de narrar cada arquivo lido.
+ * sinal de vida de vez em quando, fala se der erro, e no fim lê o resumo.
+ *
+ * O sinal de vida NÃO recita o comando que está rodando. Isso é log de
+ * terminal, e ninguém fala assim com outra pessoa: "cd c:/repositorio &&
+ * claude plugin list" não diz nada a quem está esperando. Ele conta o TIPO de
+ * trabalho — lendo, mexendo em arquivo, rodando coisa — e mais nada.
  */
 const NARRATION_HEARTBEAT_MS = 45_000;
 let narrating = false;
 let narrationTimer: NodeJS.Timeout | null = null;
 let narratedError = false;
+let heartbeatCount = 0;
+
+/** O que dizer quando ele ainda está trabalhando, sem soletrar comando. */
+function stillWorking(): string {
+  const doing: Record<string, string> = {
+    read: 'dando uma olhada no projeto',
+    edit: 'mexendo nos arquivos',
+    shell: 'rodando as coisas por aqui',
+    web: 'pesquisando',
+    task: 'com o subagente trabalhando',
+  };
+  const what = doing[orchestrator.currentSkill] ?? 'nisso';
+  // Uma variação a cada duas voltas: repetir a mesma frase soa gravado.
+  heartbeatCount += 1;
+  return heartbeatCount % 2 === 0
+    ? `Continuo ${what} — te aviso assim que terminar.`
+    : `Ainda ${what}.`;
+}
 
 const stopNarration = (): void => {
   narrating = false;
@@ -165,11 +188,11 @@ async function runPending(): Promise<void> {
 
   narrating = true;
   narratedError = false;
+  heartbeatCount = 0;
   if (narrationTimer) clearInterval(narrationTimer);
   narrationTimer = setInterval(() => {
     if (!narrating) return;
-    const action = orchestrator.currentAction;
-    agentSays(action ? `Ainda nisso. Agora: ${action.toLowerCase()}.` : 'Ainda trabalhando.');
+    agentSays(stillWorking());
   }, NARRATION_HEARTBEAT_MS);
   narrationTimer.unref?.();
 }
@@ -252,6 +275,22 @@ async function publishTree(): Promise<void> {
   broadcast({ type: 'tree.subjects', graph: await subjectGraph(), status: dbState() });
 }
 
+/**
+ * Quem está instalado nesta máquina — plugins, `.claude` do projeto e o seu.
+ *
+ * Roda a cada troca de projeto porque plugin de escopo "project" só vale onde
+ * foi instalado: o catálogo é do projeto aberto, não da ferramenta.
+ */
+async function refreshCatalog(): Promise<void> {
+  try {
+    const catalog = await discoverCatalog(prefs.projectPath);
+    orchestrator.setCatalog(catalog);
+    console.log(`[catálogo] ${catalog.agents.length} agente(s) e ${catalog.skills.length} skill(s) instaladas`);
+  } catch (error) {
+    console.warn('[catálogo] não consegui varrer o disco:', (error as Error).message);
+  }
+}
+
 async function bootRuntimes(reason: string): Promise<void> {
   const ok = await isUsableDirectory(prefs.projectPath);
   if (!ok) {
@@ -263,6 +302,7 @@ async function bootRuntimes(reason: string): Promise<void> {
   if (config.shell.autoStart) shell.start(prefs.projectPath);
   if (config.claude.autoStart) claude.start(prefs.projectPath);
   publishProject();
+  void refreshCatalog();
 }
 
 /* ------------------------------------------------------------- comandos --- */
@@ -360,13 +400,23 @@ async function handle(client: WebSocket, command: ClientCommand): Promise<void> 
       await converse(command.text, command.images);
       return;
 
-    case 'conversation.confirm':
-      if (command.accept) void runPending();
-      else {
-        conversation.pending = null;
-        publishConversation();
+    case 'conversation.confirm': {
+      // O clique é uma resposta como qualquer outra: entra na conversa como
+      // fala sua. Sem isso o plano saía do ar e ninguém via quem disse sim.
+      if (!conversation.pending) return;
+      const said = command.accept ? 'Pode ir.' : 'Agora não.';
+      conversation.note('user', said);
+      broadcast({ type: 'conversation.turn', role: 'user', text: said });
+
+      if (command.accept) {
+        void runPending();
+        return;
       }
+      conversation.pending = null;
+      publishConversation();
+      agentSays('Beleza, deixei de lado. O que você prefere?');
       return;
+    }
 
     case 'auth.check':
       await refreshAuth('verificação pedida pela interface');
@@ -652,6 +702,7 @@ process.on('SIGTERM', shutdown);
 // O banco pode subir depois da ferramenta: quando ele aparecer, o Tree acende
 // sozinho, sem reiniciar nada.
 await refreshAuth('verificação inicial');
+await refreshCatalog();
 await refreshAccountUsage();
 await checkVoice();
 await initDb((next) => {

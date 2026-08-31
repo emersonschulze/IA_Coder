@@ -35,3 +35,20 @@ export function initialsOf(name: string, given?: string): string {
 export function pct(value: number): number {
   return Math.max(0, Math.min(100, value));
 }
+
+/**
+ * Busca frouxa para os filtros de painel: sem acento, sem caixa, e o texto
+ * digitado casa em qualquer um dos campos oferecidos.
+ *
+ * Frouxa de propósito — quem procura "cnpj" não deveria precisar lembrar se a
+ * skill se chama `auditar-cnpj` ou `pesquisar-cnpj`.
+ */
+const fold = (text: string): string =>
+  text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
+export function matches(query: string, ...fields: (string | undefined)[]): boolean {
+  const needle = fold(query.trim());
+  if (!needle) return true;
+  const haystack = fold(fields.filter(Boolean).join(' '));
+  return needle.split(/\s+/).every((term) => haystack.includes(term));
+}

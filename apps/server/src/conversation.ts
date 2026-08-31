@@ -69,6 +69,15 @@ export class Conversation {
     this.pending = null;
   }
 
+  /**
+   * Registra uma fala que nao passou pelo Claude - o clique em "Pode ir", por
+   * exemplo. Sem isso a conversa que ele lembra fica com um buraco: o plano
+   * seria executado sem ninguem ter dito sim.
+   */
+  note(role: 'user' | 'agent', text: string): void {
+    this.history.push({ role, text });
+  }
+
   async say(text: string, images?: ImageAttachment[]): Promise<Reply> {
     this.history.push({ role: 'user', text });
 

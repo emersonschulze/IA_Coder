@@ -257,6 +257,57 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Filtro do painel: some no meio do cabeçalho da lista, aparece quando a
+   lista é grande demais para varrer com o olho. */
+.search {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  margin: 10px 10px 0;
+}
+.search input {
+  width: 100%;
+  padding: 6px 26px 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(4, 8, 16, 0.55);
+  color: var(--txt);
+  font-family: var(--mono);
+  font-size: 10px;
+  outline: none;
+  transition: var(--fast);
+  appearance: none;
+}
+.search input::-webkit-search-cancel-button {
+  display: none;
+}
+.search input::placeholder {
+  color: var(--txt-faint);
+}
+.search input:focus {
+  border-color: var(--line-hot);
+  box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.07);
+}
+.search button {
+  position: absolute;
+  right: 6px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--txt-dim);
+  font-size: 8px;
+  line-height: 1;
+  cursor: pointer;
+}
+.search button:hover {
+  color: var(--cy);
+}
+
 .pulse {
   position: absolute;
   top: 8px;

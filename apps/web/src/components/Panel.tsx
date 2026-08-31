@@ -126,3 +126,37 @@ export const PanelBody = forwardRef<HTMLDivElement, { children: ReactNode; class
 export function PanelEmpty({ children }: { children: ReactNode }) {
   return <p className={styles.empty}>{children}</p>;
 }
+
+/**
+ * Filtro de uma linha, no topo do painel.
+ *
+ * Existe porque o catálogo real é grande: são dezenas de skills instaladas por
+ * plugin, e rolar oitenta cartões para achar uma é pior do que digitar três
+ * letras.
+ */
+export function PanelSearch({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+}) {
+  return (
+    <div className={styles.search}>
+      <input
+        type="search"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        spellCheck={false}
+      />
+      {value && (
+        <button type="button" onClick={() => onChange('')} title="Limpar">
+          ✕
+        </button>
+      )}
+    </div>
+  );
+}

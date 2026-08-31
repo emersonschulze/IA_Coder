@@ -227,10 +227,12 @@ export function ConversationPanel({ onInput, onConfirm, onSaveKnowledge, onOpenA
     if (ttsEnabled) void speak(lastSay.text);
   }, [lastSay, ttsEnabled, speak]);
 
+  // Sempre no fim: fala nova, resultado ou plano recém-proposto. O plano
+  // entrando é o caso que mais importa — é onde estão os botões de resposta.
   useEffect(() => {
     const node = feed.current;
     if (node) node.scrollTop = node.scrollHeight;
-  }, [turns.length, result]);
+  }, [turns.length, result, conversation.pending, conversation.thinking]);
 
   // Waveform fora do React: 60 quadros por segundo não podem virar render.
   useEffect(() => {
@@ -348,32 +350,39 @@ export function ConversationPanel({ onInput, onConfirm, onSaveKnowledge, onOpenA
               )}
             </div>
           )}
-        </div>
 
-        {conversation.pending && (
-          <div className={styles.plan}>
-            <div className={styles.planHead}>
-              <span className={styles.risk} data-risk={conversation.pending.risk}>
-                risco {conversation.pending.risk}
-              </span>
-              <strong>{conversation.pending.title}</strong>
+          {/*
+            O plano mora DENTRO da conversa, não abaixo dela.
+            Fora do feed ele empurrava a caixa de digitar para fora do painel:
+            um plano de seis passos não cabia, não rolava, e você ficava vendo
+            uma pergunta que não tinha como responder. Aqui ele é a última fala
+            do agente — rola junto com o resto e os botões sempre chegam.
+          */}
+          {conversation.pending && (
+            <div className={styles.plan}>
+              <div className={styles.planHead}>
+                <span className={styles.risk} data-risk={conversation.pending.risk}>
+                  risco {conversation.pending.risk}
+                </span>
+                <strong>{conversation.pending.title}</strong>
+              </div>
+              <ol className={styles.steps}>
+                {conversation.pending.steps.map((step, index) => (
+                  <li key={index}>{step}</li>
+                ))}
+              </ol>
+              <div className={styles.confirm}>
+                <button type="button" className={styles.go} onClick={() => onConfirm(true)}>
+                  ▶ Pode ir
+                </button>
+                <button type="button" className={styles.no} onClick={() => onConfirm(false)}>
+                  ✕ Agora não
+                </button>
+              </div>
+              <p className={styles.tip}>Ou responda: “pode mandar”.</p>
             </div>
-            <ol className={styles.steps}>
-              {conversation.pending.steps.map((step, index) => (
-                <li key={index}>{step}</li>
-              ))}
-            </ol>
-            <div className={styles.confirm}>
-              <button type="button" className={styles.go} onClick={() => onConfirm(true)}>
-                ▶ Pode ir
-              </button>
-              <button type="button" className={styles.no} onClick={() => onConfirm(false)}>
-                ✕ Agora não
-              </button>
-            </div>
-            <p className={styles.tip}>Ou responda: “pode mandar”.</p>
-          </div>
-        )}
+          )}
+        </div>
 
         {attachments.length > 0 && (
           <div className={styles.pendingImages}>
