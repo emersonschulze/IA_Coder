@@ -101,6 +101,15 @@ export type ClientCommand =
   | { type: 'knowledge.forget'; subjectId: string }
   /** Descarta a análise atual sem gravar nada — some o convite de guardar. */
   | { type: 'knowledge.discard' }
+  /**
+   * Grava um assunto ESCRITO POR VOCÊ, sem passar pelo agente.
+   *
+   * O caminho automático (`knowledge.save`) só existe depois de uma execução
+   * terminar, e pede ao agente que resuma a conversa. Uma análise feita só no
+   * Talking nunca chegava lá — e era justamente a que valia a pena guardar.
+   * Aqui o título e o contexto são seus; nada é inferido.
+   */
+  | { type: 'knowledge.manual'; title: string; summary: string; tags?: string[] }
   | { type: 'ping' };
 
 export type ConnectionState = 'connecting' | 'open' | 'reconnecting' | 'closed';

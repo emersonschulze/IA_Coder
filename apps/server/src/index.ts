@@ -886,6 +886,38 @@ async function handle(client: WebSocket, command: ClientCommand): Promise<void> 
       broadcast({ type: 'knowledge.reused', subjects: [] });
       return;
 
+    case 'knowledge.manual': {
+      if (!dbReady()) {
+        return send(client, {
+          type: 'error',
+          message: 'O Tree precisa do Postgres. Suba com: docker compose up -d',
+        });
+      }
+      const title = command.title?.trim();
+      const summary = command.summary?.trim();
+      if (!title || !summary) {
+        return send(client, { type: 'error', message: 'Preciso do nome do nó e do contexto.' });
+      }
+
+      // Sem `claude.ask` aqui de propósito: este caminho existe para funcionar
+      // quando o agente não está de pé, ou quando você simplesmente sabe o que
+      // quer guardar melhor do que ele.
+      const saved = await saveSubject(
+        { title, slug: title, summary, tags: command.tags ?? [] },
+        { projectPath: prefs.projectPath },
+      );
+      if (!saved) return send(client, { type: 'error', message: 'Falhei ao gravar o assunto.' });
+
+      broadcast({
+        type: 'knowledge.saved', id: saved.id, title: saved.title, created: saved.created,
+      });
+      agentSays(saved.created
+        ? `Guardei no Tree: ${saved.title}. Foi você que escreveu, então vai inteiro do jeito que está.`
+        : `Atualizei no Tree: ${saved.title}. O resumo dele agora é o que você escreveu.`);
+      await publishTree();
+      return;
+    }
+
     case 'knowledge.forget':
       await forgetSubject(command.subjectId);
       return void publishTree();

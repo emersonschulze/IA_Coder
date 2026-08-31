@@ -8,6 +8,8 @@ import styles from './Panels.module.css';
 interface Props {
   onList: () => void;
   onOpen: (subjectId: string) => void;
+  /** Abre o formulário de assunto escrito por você. */
+  onNewSubject: () => void;
 }
 
 /** Cada tipo de peça da stack tem sua cor — dá para ler o desenho sem legenda. */
@@ -58,7 +60,7 @@ const STATUS_MESSAGE: Record<string, string> = {
  * Clicou num assunto → nível 2: quais micro frontends, serviços, bancos e
  * caches participam daquela demanda, e como se ligam.
  */
-export function TreePanel({ onList, onOpen }: Props) {
+export function TreePanel({ onList, onOpen, onNewSubject }: Props) {
   const graph = useSession((state) => state.tree);
   const status = useSession((state) => state.treeStatus);
   const detail = useSession((state) => state.treeDetail);
@@ -130,7 +132,24 @@ export function TreePanel({ onList, onOpen }: Props) {
           >
             ←
           </button>
-        ) : undefined
+        ) : (
+          /*
+           * A saída manual, sempre à mão.
+           *
+           * O convite automático só aparece depois de uma execução terminar —
+           * análise feita só conversando nunca chegava lá, e era justamente a
+           * que valia guardar. Aqui não depende de nada: nem do agente, nem de
+           * ter rodado alguma coisa.
+           */
+          <button
+            type="button"
+            className={styles.headAction}
+            onClick={onNewSubject}
+            title="Guardar um assunto escrito por você (ou digite /tree no Talking)"
+          >
+            ＋
+          </button>
+        )
       }
       style={{ flex: '1 1 0px', minHeight: 220 }}
     >
@@ -157,7 +176,7 @@ export function TreePanel({ onList, onOpen }: Props) {
           onSelect={openSubject}
           empty={
             status === 'ok'
-              ? 'nenhum assunto guardado ainda — termine uma análise e clique em “Guardar no Tree”'
+              ? 'nenhum assunto guardado ainda — use o ＋ aqui em cima, ou digite /tree no Talking'
               : STATUS_MESSAGE[status]
           }
         />

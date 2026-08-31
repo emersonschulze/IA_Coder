@@ -5,6 +5,7 @@ import { AuthGate } from '@/components/AuthGate';
 import { ConversationPanel } from '@/components/ConversationPanel';
 import { McpGate } from '@/components/McpGate';
 import { ProjectPicker } from '@/components/ProjectPicker';
+import { SubjectDialog } from '@/components/SubjectDialog';
 import { SkillsPanel } from '@/components/SkillsPanel';
 import { StatusArchivesPanel } from '@/components/StatusArchivesPanel';
 import { Topbar } from '@/components/Topbar';
@@ -29,6 +30,8 @@ export default function App() {
   const socket = useRef<IaCoderSocket | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
+  /** `null` = fechado. String = aberto, com o nome já sugerido. */
+  const [subjectForm, setSubjectForm] = useState<string | null>(null);
 
   useEffect(() => {
     const client = new IaCoderSocket({
@@ -76,6 +79,11 @@ export default function App() {
 
   const discardKnowledge = useCallback(() => {
     socket.current?.send({ type: 'knowledge.discard' });
+  }, []);
+
+  const saveSubjectManually = useCallback((title: string, summary: string, tags: string[]) => {
+    socket.current?.send({ type: 'knowledge.manual', title, summary, tags });
+    setSubjectForm(null);
   }, []);
 
   const openArtifact = useCallback((path: string, reveal?: boolean) => {
@@ -189,10 +197,15 @@ export default function App() {
               onConfirm={confirmPlan}
               onSaveKnowledge={saveKnowledge}
               onDiscardKnowledge={discardKnowledge}
+              onOpenSubjectForm={(title) => setSubjectForm(title)}
               onOpenArtifact={openArtifact}
               ttsEnabled={speech.enabled}
             />
-            <TreePanel onList={listSubjects} onOpen={openSubject} />
+            <TreePanel
+              onList={listSubjects}
+              onOpen={openSubject}
+              onNewSubject={() => setSubjectForm('')}
+            />
           </div>
         </div>
       </div>
@@ -207,6 +220,14 @@ export default function App() {
           onLoginWindow={openMcpLoginWindow}
           onRecheck={recheckMcp}
           onClose={closeMcp}
+        />
+      )}
+
+      {subjectForm !== null && (
+        <SubjectDialog
+          initialTitle={subjectForm}
+          onSave={saveSubjectManually}
+          onClose={() => setSubjectForm(null)}
         />
       )}
 

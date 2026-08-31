@@ -13,6 +13,8 @@ interface Props {
   onSaveKnowledge: () => void;
   /** Recusa guardar esta análise — o convite some e nada vai para o banco. */
   onDiscardKnowledge: () => void;
+  /** `/tree` — abre o formulário de assunto escrito por você. */
+  onOpenSubjectForm: (title: string) => void;
   /** Abre o arquivo gerado com o programa padrão do Windows. */
   onOpenArtifact: (path: string, reveal?: boolean) => void;
   /** O botão 🔊 da barra. */
@@ -94,7 +96,8 @@ async function toAttachment(file: File): Promise<Attachment> {
  * desligado.
  */
 export function ConversationPanel({
-  onInput, onConfirm, onSaveKnowledge, onDiscardKnowledge, onOpenArtifact, ttsEnabled,
+  onInput, onConfirm, onSaveKnowledge, onDiscardKnowledge, onOpenSubjectForm, onOpenArtifact,
+  ttsEnabled,
 }: Props) {
   const conversation = useSession((state) => state.conversation);
   const turns = useSession((state) => state.turns);
@@ -195,6 +198,21 @@ export function ConversationPanel({
   const submitMessage = useCallback(() => {
     const value = typed.trim();
     if (!value && attachments.length === 0) return;
+
+    /*
+     * `/tree` não é uma mensagem para o agente — é um comando da ferramenta.
+     *
+     * Vale mesmo com ele pensando ou fora do ar: guardar o que VOCÊ entendeu
+     * não depende de nenhum turno. O que vem depois do comando vira o nome
+     * sugerido do nó, então `/tree identidade e SSO` já abre preenchido.
+     */
+     const comando = /^\/(tree|assunto|salvar)\s*/i.exec(value);
+    if (comando) {
+      onOpenSubjectForm(value.slice(comando[0].length).trim());
+      setTyped('');
+      return;
+    }
+
     if (conversation.thinking) return;
     const images = attachments.length > 0
       ? attachments.map(({ mediaType, data, name }) => ({ mediaType, data, name }))
@@ -202,7 +220,7 @@ export function ConversationPanel({
     onInput(value || 'Veja a imagem em anexo.', images);
     setTyped('');
     setAttachments([]);
-  }, [typed, attachments, conversation.thinking, onInput]);
+  }, [typed, attachments, conversation.thinking, onInput, onOpenSubjectForm]);
 
   // Ctrl+Enter envia de qualquer lugar da tela — o velho hábito continua valendo.
   useEffect(() => {
@@ -484,7 +502,7 @@ export function ConversationPanel({
                 addFiles(files);
               }
             }}
-            placeholder="Aqui o texto que posso digitar…"
+            placeholder="Aqui o texto que posso digitar… (/tree guarda um assunto)"
           />
           <button
             type="submit"
