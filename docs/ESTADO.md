@@ -377,6 +377,10 @@ tempo demais, as três versões dizem há quanto tempo e lembram do abortar.
 - [ ] Se o volume do Postgres for antigo, aplicar a migração:
       `docker exec -i ia_coder_postgres psql -U iacoder -d iacoder < db\migrations\001_tree_dois_niveis.sql`
       (o log do servidor avisa: `a tabela "subjects" não existe`).
+- [ ] Em banco que já existia, aplicar também a 002 — ela põe o Tree em escopo
+      de projeto (`UNIQUE (project_path, slug)` e busca filtrada):
+      `docker exec -i ia_coder_postgres psql -U iacoder -d iacoder < db\migrations\002_tree_por_projeto.sql`
+      (o log avisa: `o Tree ainda é global`). Volume novo já nasce assim.
 - [ ] Redis está no compose mas o servidor **ainda não usa** — entra quando
       houver mais de um agente em paralelo (pub/sub e fila).
 - [ ] Embeddings: sem Ollama, o Tree cai para busca por texto (pg_trgm). Para

@@ -9,6 +9,8 @@ interface Props {
   agent: Agent | undefined;
   skill: Skill | undefined;
   position: number;
+  /** Abre o arquivo gerado com o programa padrão do Windows (comando `artifact.open`). */
+  onOpenArtifact: (path: string, reveal?: boolean) => void;
 }
 
 const STATE_LABEL: Record<Block['state'], string> = {
@@ -30,7 +32,7 @@ const LOG_CLASS = {
 } as const;
 
 /** Um bloco por agente participante do workflow — o "Agent N fazendo X item" do desenho. */
-export function AgentBlock({ block, agent, skill, position }: Props) {
+export function AgentBlock({ block, agent, skill, position, onOpenArtifact }: Props) {
   const anchorRef = useAnchor('block', block.id);
   const logRef = useRef<HTMLDivElement>(null);
   const color = agent?.color ?? '#22d3ee';
@@ -122,14 +124,23 @@ export function AgentBlock({ block, agent, skill, position }: Props) {
         </div>
       )}
 
+      {/*
+        `href` é caminho de disco (`C:\...`), não URL: com `window.open` o
+        navegador tratava isso como endereço relativo à página do Vite e abria
+        um 404. Quem abre arquivo é o servidor, que roda nesta máquina.
+      */}
       {block.artifacts.length > 0 && (
         <div className={styles.files}>
           {block.artifacts.map((artifact) => (
             <span
               key={artifact.id}
               className={styles.file}
-              title={artifact.href ?? artifact.name}
-              onClick={() => artifact.href && window.open(artifact.href, '_blank', 'noopener')}
+              title={`${artifact.href ?? artifact.name}\n(clique abre · botão direito mostra na pasta)`}
+              onClick={() => artifact.href && onOpenArtifact(artifact.href)}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                if (artifact.href) onOpenArtifact(artifact.href, true);
+              }}
             >
               ＋ {artifact.name}
             </span>

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { useDialogFocus } from '@/hooks/useDialogFocus';
 import { useSession } from '@/store/useSession';
 import type { McpServer } from '@/types/domain';
 import styles from './McpGate.module.css';
@@ -51,6 +52,7 @@ export function McpGate({ onLogin, onLoginWindow, onRecheck, onClose }: Props) {
   const mcp = useSession((state) => state.mcp);
   const login = useSession((state) => state.mcpLogin);
   const console_ = useRef<HTMLDivElement>(null);
+  const dialogRef = useDialogFocus<HTMLDivElement>(Boolean(mcp));
 
   useEffect(() => {
     const node = console_.current;
@@ -80,7 +82,14 @@ export function McpGate({ onLogin, onLoginWindow, onRecheck, onClose }: Props) {
     <div className={styles.overlay} onMouseDown={(event) => {
       if (event.target === event.currentTarget) onClose();
     }}>
-      <div className={styles.dialog} role="dialog" aria-label="Servidores MCP">
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        className={styles.dialog}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Servidores MCP"
+      >
         <header className={styles.head}>
           <div className={styles.headText}>
             <span className={styles.badge}>

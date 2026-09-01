@@ -83,6 +83,15 @@ export interface VoiceHealth {
 export interface ConversationState {
   active: boolean;
   thinking: boolean;
+  /**
+   * Uma execução aprovada está rodando agora.
+   *
+   * Diferente de `thinking`, que é o turno de CONVERSA. Enquanto isto for true a
+   * conversa não é atendida — uma pergunta no meio da execução sequestraria o
+   * turno dela —, e a interface usa o campo para dizer isso antes de a pessoa
+   * digitar.
+   */
+  executing: boolean;
   /** Plano esperando o seu "pode ir". */
   pending: { title: string; steps: string[]; risk: 'low' | 'medium' | 'high' } | null;
 }

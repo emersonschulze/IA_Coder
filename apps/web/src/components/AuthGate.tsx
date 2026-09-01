@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { useDialogFocus } from '@/hooks/useDialogFocus';
 import { useSession } from '@/store/useSession';
 import styles from './AuthGate.module.css';
 
@@ -22,20 +23,32 @@ export function AuthGate({ onLogin, onLoginWindow, onRecheck }: Props) {
   const auth = useSession((state) => state.auth);
   const login = useSession((state) => state.login);
   const console_ = useRef<HTMLDivElement>(null);
+  // Este é o único portão que cobre a aplicação INTEIRA e não tem Esc: sem o
+  // foco vindo junto, dava para tabular o app inteiro por baixo do overlay
+  // antes de chegar no botão de entrar.
+  const barrado = Boolean(auth && !auth.loggedIn);
+  const dialogRef = useDialogFocus<HTMLDivElement>(barrado);
 
   useEffect(() => {
     const node = console_.current;
     if (node) node.scrollTop = node.scrollHeight;
   }, [login.lines.length]);
 
-  if (!auth || auth.loggedIn) return null;
+  if (!auth || !barrado) return null;
 
   const expired = auth.reason === 'expired';
   const started = login.lines.length > 0 || login.running;
 
   return (
     <div className={styles.overlay}>
-      <div className={styles.dialog} role="alertdialog" aria-label="Login do Claude">
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        className={styles.dialog}
+        role="alertdialog"
+        aria-modal="true"
+        aria-label="Login do Claude"
+      >
         <header className={styles.head}>
           <span className={styles.badge}>{expired ? 'Sessão expirada' : 'Sem credencial'}</span>
           <h2>

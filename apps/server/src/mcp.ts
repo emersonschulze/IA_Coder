@@ -1,5 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
+import { LOGIN_TIMEOUT_MS } from './auth.js';
 import { config } from './config.js';
 import type { McpServer, McpStatus } from './protocol.js';
 
@@ -114,23 +115,55 @@ export async function listMcpServers(cwd: string): Promise<McpServer[]> {
  */
 export async function loginMcpViaShell(
   name: string,
-  shell: { run: (command: string) => Promise<{ output: string; exitCode: number }> },
+  shell: { run: (command: string, timeoutMs?: number) => Promise<{ output: string; exitCode: number }> },
   onLine: (line: string) => void,
   listen: (handler: (line: string) => void) => () => void,
 ): Promise<{ ok: boolean; output: string }> {
   const stop = listen(onLine);
   try {
-    const result = await shell.run(`${config.claude.bin} mcp login "${name.replace(/"/g, '`"')}"`);
+    /*
+     * Aspas SIMPLES, com `'` duplicado — não aspas duplas.
+     *
+     * Dentro de aspas duplas o PowerShell ainda expande `$(...)` e `$var`, e o
+     * nome do servidor chega cru pelo WebSocket: um servidor chamado
+     * `x$(...)` viraria comando executado antes mesmo de o `claude` ser
+     * chamado. Em aspas simples nada é expandido, e o único caractere que
+     * precisa de escape é a própria aspa simples.
+     */
+    const argumento = `'${name.replace(/'/g, "''")}'`;
+    // Prazo largo (você aprova no navegador), mas nunca infinito: sem ele, um
+    // login abandonado prendia a fila do shell e nunca emitia `mcp.login.done`.
+    const result = await shell.run(`${config.claude.bin} mcp login ${argumento}`, LOGIN_TIMEOUT_MS);
     return { ok: result.exitCode === 0, output: result.output };
   } finally {
     stop();
   }
 }
 
+/**
+ * O nome é de um servidor que o CLI realmente conhece?
+ *
+ * O `mcp.login` chega pelo WebSocket e o nome vai parar numa linha de comando.
+ * Casar contra a lista que o `claude mcp list` devolveu é a checagem mais
+ * honesta que existe aqui: só entra o que já estava configurado na máquina.
+ */
+export const isKnownServer = (name: string, servers: McpServer[]): boolean =>
+  servers.some((server) => server.name === name);
+
+/**
+ * Caracteres que o `cmd.exe` interpreta e que não dá para citar com segurança
+ * na linha do `start`. Nome de servidor MCP não tem nenhum deles — quem tiver
+ * não passa daqui.
+ */
+const CMD_METACHARS = /["&|<>^%\r\n]/;
+
 /** A saída de emergência: uma janela de terminal visível, quando o shell não serve. */
 export function openMcpLoginTerminal(name: string, cwd: string): void {
   if (process.platform !== 'win32') {
     throw new Error('Abrir o terminal de login automaticamente só funciona no Windows.');
+  }
+  if (CMD_METACHARS.test(name)) {
+    throw new Error(`Nome de servidor MCP com caractere que o terminal interpreta: ${name}`);
   }
   const inner = `${config.claude.bin} mcp login '${name.replace(/'/g, "''")}'`;
   const line = `start "" powershell.exe -NoExit -NoProfile -Command "${inner}"`;

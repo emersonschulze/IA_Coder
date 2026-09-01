@@ -530,6 +530,14 @@
   background: rgba(255, 255, 255, 0.035);
   transform: translateX(3px);
 }
+/* Artefato sem caminho no disco não abre nada — não pode parecer clicável. */
+.archive:disabled {
+  opacity: 0.5;
+  transform: none;
+  cursor: default;
+  border-color: transparent;
+  background: none;
+}
 .archiveIcon {
   display: grid;
   place-items: center;

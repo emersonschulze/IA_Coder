@@ -1,4 +1,4 @@
-import { dbReady, query } from './db.js';
+import { dbReady, query, withTransaction } from './db.js';
 import { embed, toVector } from './embeddings.js';
 import type { ComponentKind, SubjectDetail, SubjectGraph } from './protocol.js';
 
@@ -28,11 +28,17 @@ const slugify = (text: string): string =>
 
 /* --------------------------------------------------------------- leitura -- */
 
-/** Nível 1: os assuntos e como eles conversam entre si. */
-export async function subjectGraph(): Promise<SubjectGraph> {
+/**
+ * Nível 1: os assuntos e como eles conversam entre si.
+ *
+ * @param projectPath o Tree é por projeto. A ferramenta troca de projeto em
+ *   tempo de execução contra o mesmo banco, e sem este filtro o painel misturava
+ *   os assuntos de todos eles no mesmo espaço.
+ */
+export async function subjectGraph(projectPath: string): Promise<SubjectGraph> {
   if (!dbReady()) return { nodes: [], edges: [] };
   try {
-    return await readSubjectGraph();
+    return await readSubjectGraph(projectPath);
   } catch (error) {
     // Um erro de SQL não pode virar promessa rejeitada sem dono: o evento
     // simplesmente não chegaria na tela e o painel ficaria mudo.
@@ -41,7 +47,7 @@ export async function subjectGraph(): Promise<SubjectGraph> {
   }
 }
 
-async function readSubjectGraph(): Promise<SubjectGraph> {
+async function readSubjectGraph(projectPath: string): Promise<SubjectGraph> {
   const nodes = await query<{
     id: string; slug: string; title: string; summary: string;
     tags: string[]; hits: number; components: string;
@@ -50,13 +56,19 @@ async function readSubjectGraph(): Promise<SubjectGraph> {
            COUNT(c.id)::text AS components
     FROM subjects s
     LEFT JOIN components c ON c.subject_id = s.id
+    WHERE s.project_path = $1
     GROUP BY s.id
     ORDER BY s.updated_at DESC
-  `);
+  `, [projectPath]);
 
-  const edges = await query<{ from: string; to: string; kind: string }>(
-    `SELECT from_subject AS from, to_subject AS to, kind FROM subject_links`,
-  );
+  // As ligações seguem os assuntos deste projeto: aresta apontando para fora
+  // dele não tem nó do outro lado na tela.
+  const edges = await query<{ from: string; to: string; kind: string }>(`
+    SELECT sl.from_subject AS from, sl.to_subject AS to, sl.kind
+    FROM subject_links sl
+    JOIN subjects a ON a.id = sl.from_subject AND a.project_path = $1
+    JOIN subjects b ON b.id = sl.to_subject   AND b.project_path = $1
+  `, [projectPath]);
 
   return {
     nodes: nodes.map((row) => ({
@@ -124,68 +136,98 @@ export async function saveSubject(
 
   const slug = slugify(extracted.slug || extracted.title);
   const content = [extracted.title, extracted.summary, (extracted.tags ?? []).join(' ')].join('\n');
+  // O embedding é uma chamada de rede: fica FORA da transação, senão o Ollama
+  // lento seguraria uma transação aberta no banco.
   const vector = await embed(content);
 
-  // `xmax = 0` distingue linha inserida de linha atualizada num upsert. Sem
-  // isso não dá para dizer "guardei" ou "atualizei" — e são coisas diferentes
-  // para quem olha: uma cria assunto novo, a outra reescreve um que já valia,
-  // junto com a stack inteira dele.
-  const [subject] = await query<{ id: string; title: string; created: boolean }>(`
-    INSERT INTO subjects (slug, title, summary, persona, project_path, tags, content, embedding)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-    ON CONFLICT (slug) DO UPDATE SET
-      title = EXCLUDED.title,
-      summary = EXCLUDED.summary,
-      tags = EXCLUDED.tags,
-      content = EXCLUDED.content,
-      embedding = COALESCE(EXCLUDED.embedding, subjects.embedding)
-    RETURNING id, title, (xmax = 0) AS created
-  `, [
-    slug, extracted.title.trim(), extracted.summary.trim(),
-    meta.persona ?? null, meta.projectPath, extracted.tags ?? [],
-    content, vector ? toVector(vector) : null,
-  ]);
-  if (!subject) return null;
+  /*
+   * Tudo ou nada.
+   *
+   * São cinco escritas encadeadas — assunto, DELETE da stack, componentes,
+   * ligações e relações. Soltas, uma queda no meio deixava o assunto gravado
+   * com metade da stack e nenhuma ligação, e o usuário só via "Não deu para
+   * guardar" sem saber que algo já tinha entrado.
+   */
+  return withTransaction(async (tx) => {
+    // `xmax = 0` distingue linha inserida de linha atualizada num upsert. Sem
+    // isso não dá para dizer "guardei" ou "atualizei" — e são coisas diferentes
+    // para quem olha: uma cria assunto novo, a outra reescreve um que já valia,
+    // junto com a stack inteira dele.
+    //
+    // O conflito é por (project_path, slug), não por slug: o slug é gerado do
+    // título, e "autenticacao" do portal-admin reescrevia o "autenticacao" da
+    // loja-web — outro projeto, mesmo nome — apagando a stack alheia junto.
+    const [subject] = await tx<{ id: string; title: string; created: boolean }>(`
+      INSERT INTO subjects (slug, title, summary, persona, project_path, tags, content, embedding)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      ON CONFLICT (project_path, slug) DO UPDATE SET
+        title = EXCLUDED.title,
+        summary = EXCLUDED.summary,
+        tags = EXCLUDED.tags,
+        content = EXCLUDED.content,
+        embedding = COALESCE(EXCLUDED.embedding, subjects.embedding)
+      RETURNING id, title, (xmax = 0) AS created
+    `, [
+      slug, extracted.title.trim(), extracted.summary.trim(),
+      meta.persona ?? null, meta.projectPath, extracted.tags ?? [],
+      content, vector ? toVector(vector) : null,
+    ]);
+    if (!subject) return null;
 
-  // Regravar um assunto substitui a stack dele — a análise nova é a que vale.
-  await query(`DELETE FROM components WHERE subject_id = $1`, [subject.id]);
+    /*
+     * Regravar um assunto substitui a stack dele — mas só quem TROUXE uma stack.
+     *
+     * Ausência de `components` significa "não mexi na stack" (é o caso do nó
+     * manual do Tree, que só escreve título e resumo); `[]` significa "esta
+     * demanda não tem stack". Enquanto o DELETE era incondicional, anotar à mão
+     * um assunto de mesmo nome apagava em silêncio os componentes e, por
+     * cascata, as ligações da análise que o agente tinha gravado antes.
+     */
+    if (extracted.components !== undefined) {
+      await tx(`DELETE FROM components WHERE subject_id = $1`, [subject.id]);
+    }
 
-  const byKey = new Map<string, string>();
-  for (const component of extracted.components ?? []) {
-    if (!component.key || !component.name) continue;
-    const kind = (VALID_KINDS as string[]).includes(component.kind)
-      ? (component.kind as ComponentKind)
-      : 'microservice';
-    const [row] = await query<{ id: string }>(`
-      INSERT INTO components (subject_id, key, name, kind, detail)
-      VALUES ($1, $2, $3, $4, $5)
-      ON CONFLICT (subject_id, key) DO UPDATE SET name = EXCLUDED.name, kind = EXCLUDED.kind
-      RETURNING id
-    `, [subject.id, slugify(component.key), component.name, kind, component.detail ?? null]);
-    if (row) byKey.set(slugify(component.key), row.id);
-  }
+    const byKey = new Map<string, string>();
+    for (const component of extracted.components ?? []) {
+      if (!component.key || !component.name) continue;
+      const kind = (VALID_KINDS as string[]).includes(component.kind)
+        ? (component.kind as ComponentKind)
+        : 'microservice';
+      const [row] = await tx<{ id: string }>(`
+        INSERT INTO components (subject_id, key, name, kind, detail)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (subject_id, key) DO UPDATE SET name = EXCLUDED.name, kind = EXCLUDED.kind
+        RETURNING id
+      `, [subject.id, slugify(component.key), component.name, kind, component.detail ?? null]);
+      if (row) byKey.set(slugify(component.key), row.id);
+    }
 
-  for (const link of extracted.links ?? []) {
-    const from = byKey.get(slugify(link.from));
-    const to = byKey.get(slugify(link.to));
-    if (!from || !to || from === to) continue;
-    await query(`
-      INSERT INTO component_links (from_component, to_component, kind, label)
-      VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING
-    `, [from, to, link.kind ?? 'calls', link.label ?? null]);
-  }
+    for (const link of extracted.links ?? []) {
+      const from = byKey.get(slugify(link.from));
+      const to = byKey.get(slugify(link.to));
+      if (!from || !to || from === to) continue;
+      await tx(`
+        INSERT INTO component_links (from_component, to_component, kind, label)
+        VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING
+      `, [from, to, link.kind ?? 'calls', link.label ?? null]);
+    }
 
-  for (const relatedSlug of extracted.related ?? []) {
-    const [other] = await query<{ id: string }>(`SELECT id FROM subjects WHERE slug = $1`,
-      [slugify(relatedSlug)]);
-    if (!other || other.id === subject.id) continue;
-    await query(`
-      INSERT INTO subject_links (from_subject, to_subject, kind)
-      VALUES ($1, $2, 'relates') ON CONFLICT DO NOTHING
-    `, [subject.id, other.id]);
-  }
+    for (const relatedSlug of extracted.related ?? []) {
+      // Dentro do mesmo projeto: relacionar com um assunto homônimo de outro
+      // projeto ligaria dois grafos que não têm nada a ver um com o outro.
+      const [other] = await tx<{ id: string }>(
+        `SELECT id FROM subjects WHERE slug = $1 AND project_path = $2`,
+        [slugify(relatedSlug), meta.projectPath],
+      );
+      if (!other || other.id === subject.id) continue;
+      await tx(`
+        INSERT INTO subject_links (from_subject, to_subject, kind)
+        VALUES ($1, $2, 'relates') ON CONFLICT DO NOTHING
+      `, [subject.id, other.id]);
+    }
 
-  return subject;
+    return subject;
+  });
 }
 
 export async function forgetSubject(subjectId: string): Promise<void> {
@@ -204,12 +246,16 @@ export interface Recall {
  * procuramos assuntos já confirmados que tratam do mesmo tema e mandamos o
  * resumo junto. Ele começa sabendo, em vez de investigar tudo de novo.
  */
-export async function recall(prompt: string, k = 3): Promise<Recall[]> {
+export async function recall(prompt: string, projectPath: string, k = 3): Promise<Recall[]> {
   if (!dbReady()) return [];
   const vector = await embed(prompt);
+  // Só assunto DESTE projeto: o bloco de contexto anuncia o resultado como
+  // "conhecimento já confirmado neste projeto", e trazer o assunto homônimo de
+  // outro fazia o agente partir de premissas de um sistema que não é este.
   const rows = vector
-    ? await query<Recall>(`SELECT * FROM subject_search($1::vector, $2)`, [toVector(vector), k])
-    : await query<Recall>(`SELECT * FROM subject_search_text($1, $2)`, [prompt, k]);
+    ? await query<Recall>(`SELECT * FROM subject_search($1::vector, $2, $3)`,
+      [toVector(vector), k, projectPath])
+    : await query<Recall>(`SELECT * FROM subject_search_text($1, $2, $3)`, [prompt, k, projectPath]);
 
   /*
    * O corte da busca por TEXTO era 0.15 — frouxo a ponto de casar assunto que

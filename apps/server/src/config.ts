@@ -42,6 +42,18 @@ export const config = {
   port: int(process.env.SERVER_PORT, 8787),
   database,
   host: process.env.SERVER_HOST ?? '127.0.0.1',
+  /**
+   * Origens extras que podem abrir o WebSocket, separadas por vírgula.
+   *
+   * O padrão já aceita qualquer endereço local (o Vite pode subir em 5174 se a
+   * 5173 estiver ocupada). Isto existe para quem serve a interface de outro
+   * lugar — e é a única forma de afrouxar a checagem, que sem ela deixaria
+   * qualquer site aberto no seu navegador pilotar o agente.
+   */
+  allowedOrigins: (process.env.SERVER_ALLOWED_ORIGINS ?? '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean),
 
   /** Onde as preferências ficam gravadas (caminho do projeto, recentes). */
   prefsFile: resolve(repoRoot, 'workspace', 'prefs.json'),

@@ -186,10 +186,10 @@ export default function App() {
           <div className={styles.column}>
             <AgentsPanel onInspect={inspect} />
             <SkillsPanel />
-            <StatusArchivesPanel />
+            <StatusArchivesPanel onOpenArtifact={openArtifact} />
           </div>
 
-          <Working />
+          <Working onOpenArtifact={openArtifact} />
 
           <div className={styles.column}>
             <ConversationPanel

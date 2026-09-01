@@ -12,15 +12,15 @@ import {
   saveSubject, subjectDetail, subjectGraph,
 } from './knowledge.js';
 import {
-  listMcpServers, loginMcpViaShell, openMcpLoginTerminal, permissionModeReachesMcp,
-  serverOfTool, serverSlugOfTool,
+  isKnownServer, listMcpServers, loginMcpViaShell, openMcpLoginTerminal,
+  permissionModeReachesMcp, serverOfTool, serverSlugOfTool,
 } from './mcp.js';
 import { openArtifact, pickFolderNative } from './picker.js';
 import { isUsableDirectory, listDirectory, listRoots, projectName } from './fsbrowser.js';
 import { Orchestrator } from './orchestrator.js';
 import { readPrefs, writePrefs } from './prefs.js';
 import type {
-  ClientCommand, ImageAttachment, McpState, ProjectState, ServerEvent,
+  ClientCommand, ConversationState, ImageAttachment, McpState, ProjectState, ServerEvent,
 } from './protocol.js';
 import { ShellSession } from './shell.js';
 import { Conversation, soundsLikeNo, soundsLikeYes } from './conversation.js';
@@ -43,6 +43,29 @@ const broadcast = (event: ServerEvent): void => {
 const send = (client: WebSocket, event: ServerEvent): void => {
   if (client.readyState === client.OPEN) client.send(JSON.stringify(event));
 };
+
+/**
+ * Cliente calado é cliente morto.
+ *
+ * Aba fechada à força, notebook que hibernou, Wi-Fi trocado pelo cabo: o TCP
+ * fica meio-aberto, o `close` nunca chega e o socket continua no `clients`
+ * recebendo todo broadcast para o vazio — a lista só cresce enquanto o servidor
+ * está de pé. O ping do protocolo responde por nós: quem não devolve `pong`
+ * entre dois pulsos leva `terminate()`.
+ */
+const vivos = new WeakSet<WebSocket>();
+
+setInterval(() => {
+  clients.forEach((client) => {
+    if (!vivos.has(client)) {
+      clients.delete(client);
+      client.terminate();
+      return;
+    }
+    vivos.delete(client);
+    client.ping();
+  });
+}, 30_000).unref();
 
 /* -------------------------------------------------------------- processos -- */
 
@@ -244,6 +267,8 @@ const stopNarration = (): void => {
 
 const orchestrator = new Orchestrator(broadcast, claude, {
   onFinish: (state, summary) => {
+    // Acabou a execução: a caixa de texto do Talking volta a valer.
+    publishConversation();
     if (!narrating) return;
     stopNarration();
     if (state === 'cancelled') return;
@@ -291,11 +316,17 @@ let mcp: McpState = {
 
 const publishMcp = (): void => broadcast({ type: 'mcp.state', mcp });
 
+const conversationState = (): ConversationState => ({
+  active: conversationActive,
+  thinking,
+  // A tela precisa saber que a caixa de texto não vai ser atendida agora: o
+  // `thinking` só cobre o turno de conversa, e durante uma execução ele é false.
+  executing: orchestrator.executing,
+  pending: conversation.pending,
+});
+
 const publishConversation = (): void =>
-  broadcast({
-    type: 'conversation.state',
-    state: { active: conversationActive, thinking, pending: conversation.pending },
-  });
+  broadcast({ type: 'conversation.state', state: conversationState() });
 
 /**
  * Fala e registra — tudo que ele diz passa por aqui.
@@ -321,6 +352,20 @@ async function converse(text: string, images?: ImageAttachment[]): Promise<void>
   if (!said) return;
 
   broadcast({ type: 'conversation.turn', role: 'user', text: said, images });
+
+  /*
+   * Conversar durante uma execução sequestra o turno dela.
+   *
+   * O `ask` da pergunta resolve no PRIMEIRO `result` que aparecer — que é o da
+   * execução —, colhe a prosa dela como se fosse a resposta, e o
+   * `investigate()` ainda faria o texto da execução ser descartado no caminho.
+   * De quebra, o `result` fecharia o workflow na tela com a pergunta ainda
+   * rodando no CLI. Enquanto ele estiver executando, a conversa espera.
+   */
+  if (orchestrator.executing) {
+    agentSays('Ainda estou executando o que combinamos. Se quiser parar, use o Abortar aqui em cima.');
+    return;
+  }
 
   if (conversation.pending) {
     if (soundsLikeYes(said)) return void runPending();
@@ -367,9 +412,11 @@ async function runPending(): Promise<void> {
   publishConversation();
   agentSays(sortear(COMECANDO));
 
-  const remembered = await recall(title).catch(() => []);
+  const remembered = await recall(title, prefs.projectPath).catch(() => []);
   const finalPrompt = remembered.length > 0 ? `${recallBlock(remembered)}${prompt}` : prompt;
   orchestrator.startWorkflow(finalPrompt, title);
+  // A execução começou: a tela precisa saber para não aceitar outra pergunta.
+  publishConversation();
   if (remembered.length > 0) {
     agentSays(`Reaproveitando ${remembered.length} assunto(s) que já conhecia: ${remembered.map((item) => item.title).join(', ')}.`);
     // A tela precisa saber DE QUAIS assuntos esta análise nasceu: é o que faz o
@@ -521,7 +568,9 @@ claude.on('init', publishProject);
  */
 /** Publica o nível 1 do Tree para todo mundo, com o motivo de estar assim. */
 async function publishTree(): Promise<void> {
-  broadcast({ type: 'tree.subjects', graph: await subjectGraph(), status: dbState() });
+  // O Tree é do PROJETO aberto: assunto de outro projeto não aparece aqui e não
+  // é reaproveitado como se fosse deste.
+  broadcast({ type: 'tree.subjects', graph: await subjectGraph(prefs.projectPath), status: dbState() });
 }
 
 /**
@@ -541,6 +590,10 @@ async function refreshCatalog(): Promise<void> {
 }
 
 async function bootRuntimes(reason: string): Promise<void> {
+  // Reabrir os processos derruba o turno em andamento: o pulso de 45s não pode
+  // continuar narrando um agente que já morreu ("Ainda dando uma olhada no
+  // projeto" a cada 45s, para sempre, depois de um login de MCP).
+  stopNarration();
   const ok = await isUsableDirectory(prefs.projectPath);
   if (!ok) {
     console.warn(`[runtime] pasta inexistente: ${prefs.projectPath}`);
@@ -573,13 +626,14 @@ async function handle(client: WebSocket, command: ClientCommand): Promise<void> 
 
       // Aqui mora a economia: assunto já confirmado entra como contexto pronto,
       // em vez de o agente investigar tudo outra vez.
-      const remembered = await recall(text).catch(() => []);
+      const remembered = await recall(text, prefs.projectPath).catch(() => []);
       const prompt = remembered.length > 0 ? `${recallBlock(remembered)}${text}` : text;
 
       if (!orchestrator.startWorkflow(prompt, text)) {
         send(client, { type: 'error', message: 'O Claude não está de pé. Confira a pasta do projeto.' });
         return;
       }
+      publishConversation();
       if (remembered.length > 0) {
         broadcast({
           type: 'assistant.say',
@@ -763,6 +817,12 @@ async function handle(client: WebSocket, command: ClientCommand): Promise<void> 
     case 'mcp.login': {
       const name = command.server?.trim();
       if (!name) return send(client, { type: 'error', message: 'qual servidor MCP?' });
+      // O nome vai virar linha de comando: só entra o que o CLI já listou. A
+      // lista vazia é a varredura que ainda não terminou (ou falhou) — aí o
+      // escape do `loginMcpViaShell` é quem segura.
+      if (mcp.servers.length > 0 && !isKnownServer(name, mcp.servers)) {
+        return send(client, { type: 'error', message: `Não conheço o servidor MCP "${name}".` });
+      }
 
       // Janela visível: só quando o caminho pelo shell não serve.
       if (command.mode === 'window') {
@@ -830,7 +890,7 @@ async function handle(client: WebSocket, command: ClientCommand): Promise<void> 
 
     case 'artifact.open':
       try {
-        openArtifact(command.path, command.reveal);
+        openArtifact(command.path, command.reveal ?? false, [config.artifactsDir, prefs.projectPath]);
       } catch (error) {
         send(client, { type: 'error', message: (error as Error).message });
       }
@@ -853,7 +913,7 @@ async function handle(client: WebSocket, command: ClientCommand): Promise<void> 
         return send(client, { type: 'error', message: 'O Claude precisa estar de pé para resumir o assunto.' });
       }
 
-      const graph = await subjectGraph();
+      const graph = await subjectGraph(prefs.projectPath);
       orchestrator.mode = 'silent';
       try {
         const answer = await claude.ask(extractionPrompt(graph.nodes.map((node) => node.slug)));
@@ -983,6 +1043,8 @@ const wss = new WebSocketServer({ noServer: true });
 
 wss.on('connection', (client) => {
   clients.add(client);
+  vivos.add(client);
+  client.on('pong', () => vivos.add(client));
 
   send(client, {
     type: 'session.hello',
@@ -995,17 +1057,21 @@ wss.on('connection', (client) => {
       features: FEATURES,
     },
   });
-  orchestrator.syncCatalog();
+  // Só para quem chegou: em broadcast, o `workflow.started` do retrato zera
+  // blocos, setas e resultado nas abas que já estavam assistindo.
+  orchestrator.syncCatalog((event) => send(client, event));
   void projectState().then((project) => send(client, { type: 'project.state', project }));
-  void subjectGraph().then((graph) =>
+  void subjectGraph(prefs.projectPath).then((graph) =>
     send(client, { type: 'tree.subjects', graph, status: dbState() }));
   send(client, { type: 'auth.state', auth });
   send(client, { type: 'mcp.state', mcp });
   send(client, { type: 'voice.health', health: { ...voiceHealth(), wakeWord } });
-  send(client, {
-    type: 'conversation.state',
-    state: { active: conversationActive, thinking, pending: conversation.pending },
-  });
+  // A conversa até aqui, antes do estado: sem ela, quem recarrega a página vê o
+  // cartão do plano com os botões "Pode ir / Agora não" pairando sobre um feed
+  // vazio — aprova-se sem enxergar uma linha do que levou até ali.
+  conversation.transcript.forEach(({ role, text }) =>
+    send(client, { type: 'conversation.turn', role, text }));
+  send(client, { type: 'conversation.state', state: conversationState() });
 
   // Primeira aba a conectar acorda os processos.
   if (claude.status === 'stopped' && clients.size === 1) void bootRuntimes('primeira conexão');
@@ -1026,8 +1092,36 @@ wss.on('connection', (client) => {
   client.on('close', () => clients.delete(client));
 });
 
+/**
+ * De onde a página que está falando conosco veio.
+ *
+ * WebSocket NÃO passa por CORS: sem esta checagem, qualquer site aberto numa
+ * outra aba do seu navegador podia abrir `ws://localhost:8787/ws` e ser tratado
+ * como se fosse a interface — mandar `prompt.submit` (um agente rodando na sua
+ * pasta de projeto, editando arquivo sem perguntar), varrer o disco com
+ * `project.browse`, apontar o agente para qualquer pasta com `project.set` ou
+ * pescar a URL de autorização do OAuth, que sai ao vivo em `auth.login.line`.
+ *
+ * Navegador sempre manda `Origin` no handshake, então basta exigir que ela seja
+ * local. Cliente que não é navegador (um script seu, o mock) não manda `Origin`
+ * nenhuma e continua passando — para esse a fronteira é o bind em 127.0.0.1.
+ */
+const ORIGENS_LOCAIS = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
+
+function origemPermitida(origin: string | undefined): boolean {
+  if (!origin) return true;
+  if (config.allowedOrigins.includes(origin)) return true;
+  return ORIGENS_LOCAIS.test(origin);
+}
+
 app.server.on('upgrade', (request, socket, head) => {
   if (!request.url?.startsWith('/ws')) {
+    socket.destroy();
+    return;
+  }
+  const origin = request.headers.origin;
+  if (!origemPermitida(origin)) {
+    console.warn(`[ws] recusei a conexão vinda de ${origin}`);
     socket.destroy();
     return;
   }

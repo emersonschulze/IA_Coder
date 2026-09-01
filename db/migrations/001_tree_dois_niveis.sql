@@ -95,4 +95,31 @@ LANGUAGE sql STABLE AS $$
   LIMIT k;
 $$;
 
+-- Os índices que o código assume existirem — o esquema novo tem os três, e sem
+-- eles cada leitura do Tree faz varredura de tabela.
+CREATE INDEX IF NOT EXISTS subject_links_to_idx ON subject_links (to_subject);
+CREATE INDEX IF NOT EXISTS components_subject_idx ON components (subject_id);
+CREATE INDEX IF NOT EXISTS component_links_to_idx ON component_links (to_component);
+
+-- updated_at automático.
+--
+-- Faltava aqui, e só aqui: `saveSubject` nunca escreve essa coluna à mão — quem
+-- a mantém é este gatilho. Sem ele, num banco migrado, atualizar um assunto
+-- deixava a data congelada na criação e o painel do Tree, que ordena por
+-- `updated_at DESC`, punha o assunto recém-atualizado no fim da lista para
+-- sempre. Em banco novo o mesmo fluxo funcionava — a divergência só aparecia na
+-- máquina de quem migrou.
+CREATE OR REPLACE FUNCTION touch_updated_at() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  NEW.updated_at := now();
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS subjects_touch ON subjects;
+CREATE TRIGGER subjects_touch
+  BEFORE UPDATE ON subjects
+  FOR EACH ROW EXECUTE FUNCTION touch_updated_at();
+
 COMMIT;

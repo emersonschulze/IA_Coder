@@ -7,11 +7,22 @@ import {
 } from './catalog.js';
 import type { DiscoveredCatalog } from './discovery.js';
 import type {
-  Agent, Artifact, Block, LogEntry, ServerEvent, Skill, Usage, Workflow,
+  Agent, Artifact, Block, Link, LogEntry, ServerEvent, Skill, Usage, Workflow,
 } from './protocol.js';
 import type { AccountUsage } from './usage.js';
 
 type Emit = (event: ServerEvent) => void;
+
+/**
+ * Teto de linhas de log guardadas por bloco.
+ *
+ * Os blocos só são zerados em `openWorkflow()`, e o `block.upsert` reenvia o
+ * bloco inteiro — com o array de logs — a cada reconexão ou aba nova. Sem teto,
+ * uma execução longa acumulava milhares de linhas e a aba engasgava
+ * renderizando todas de uma vez. Mesmo valor do `LOG_LIMIT` do cliente, para os
+ * dois lados cortarem no mesmo ponto.
+ */
+const LOG_LIMIT = 200;
 
 /** O quanto de um turno chega à tela. Ver `Orchestrator.mode`. */
 export type OrchestratorMode = 'full' | 'investigation' | 'silent';
@@ -33,8 +44,26 @@ export class Orchestrator {
   private agents: Agent[] = [{ ...MAIN_AGENT }];
   private skills: Skill[] = SKILLS.map((skill) => ({ ...skill }));
   private blocks = new Map<string, Block>();
-  private activeLinks: string[] = [];
+  /**
+   * As setas acesas AGORA, com o objeto inteiro — não só o id.
+   *
+   * O servidor é o dono das setas (docs/PROTOCOLO.md), então ele tem de saber
+   * redesenhá-las: quem chega no meio de uma execução (aba nova, F5, socket que
+   * reconectou) recebe os blocos de volta e ficava sem ligação nenhuma até a
+   * próxima ferramenta — minutos de tela em branco se um agente estivesse
+   * dentro de um `dotnet build`. Guardando só o id não dava nem para tentar.
+   */
+  private activeLinks = new Map<string, Link>();
   private artifacts: Artifact[] = [];
+  /**
+   * Artefatos que uma ferramenta PEDIU mas que ainda não se sabe se deram certo,
+   * indexados pelo id do `tool_use`.
+   *
+   * Um `Edit` que volta com "String to replace not found" não escreveu nada em
+   * disco; contabilizá-lo no uso da ferramenta punha no Archives um arquivo que
+   * nunca mudou. Só vira artefato quando o `tool_result` volta sem erro.
+   */
+  private pendingArtifacts = new Map<string, { blockId: string; artifact: Artifact }>();
   private workflow: Workflow | null = null;
   private toolCount = 0;
   private usage: Usage = {
@@ -128,6 +157,16 @@ export class Orchestrator {
     return this.toolCount > 0;
   }
   /**
+   * Existe uma execução de verdade em andamento?
+   *
+   * Um turno de conversa entrando no meio de uma execução sequestra o turno
+   * dela: o `ask` resolve no primeiro `result` — que é o da execução — e colhe
+   * como resposta o texto dela. Quem pergunta precisa saber disto antes.
+   */
+  get executing(): boolean {
+    return this.workflow?.kind === 'execution';
+  }
+  /**
    * O GRUPO de ferramenta em uso (read, edit, shell…).
    *
    * É o que a narração falada usa: dá para dizer "ainda lendo o projeto" sem
@@ -210,15 +249,28 @@ export class Orchestrator {
     this.emit({ type: 'skills.sync', skills: this.skills });
   }
 
-  syncCatalog(): void {
-    this.emit({ type: 'agents.sync', agents: this.agents });
-    this.emit({ type: 'skills.sync', skills: this.skills });
-    this.emit({ type: 'archives.sync', archives: this.artifacts });
-    this.emit({ type: 'usage', usage: this.usage });
+  /**
+   * O retrato do estado atual, para quem acabou de chegar.
+   *
+   * @param to para onde mandar. O padrão é todo mundo, mas o handshake passa o
+   *   cliente recém-conectado — e faz diferença: com workflow aberto, o
+   *   `workflow.started` reenviado é tratado pelo cliente como execução NOVA e
+   *   zera blocos, setas, resultado e assuntos reaproveitados. Em broadcast,
+   *   abrir uma segunda aba (ou um socket que reconectou sozinho) apagava a
+   *   tela de quem já estava assistindo.
+   */
+  syncCatalog(to: Emit = this.emit): void {
+    to({ type: 'agents.sync', agents: this.agents });
+    to({ type: 'skills.sync', skills: this.skills });
+    to({ type: 'archives.sync', archives: this.artifacts });
+    to({ type: 'usage', usage: this.usage });
     if (this.workflow) {
       this.lastEventAt = Date.now();
-    this.emit({ type: 'workflow.started', workflow: this.workflow });
-      this.blocks.forEach((block) => this.emit({ type: 'block.upsert', block }));
+      to({ type: 'workflow.started', workflow: this.workflow });
+      this.blocks.forEach((block) => to({ type: 'block.upsert', block }));
+      // As setas vivas voltam junto: o `workflow.started` acima zerou a lista do
+      // cliente, e sem isto ele veria blocos soltos, sem nenhuma ligação.
+      this.activeLinks.forEach((link) => to({ type: 'link.activated', link }));
     }
   }
 
@@ -272,6 +324,11 @@ export class Orchestrator {
     this.toolCount = 0;
     this.delegations.clear();
     this.reigning.clear();
+    this.pendingArtifacts.clear();
+    // O resumo falado do turno anterior não pode sobreviver a este: uma execução
+    // que termina sem escrever texto nenhum herdava a última frase da execução
+    // PASSADA, e a voz anunciava um trabalho que não foi feito agora.
+    this.lastText = '';
     this.workflow = {
       id: `wf_${Date.now().toString(36)}`,
       title,
@@ -293,8 +350,11 @@ export class Orchestrator {
    * que o abortar não fazia nada, deixando o agente trabalhando sozinho.
    */
   cancel(): void {
-    this.claude.stop('você abortou a execução');
+    // Encerrar ANTES de derrubar o processo: o `exit` do `stop()` também chama
+    // `finish`, e é este aqui que carrega o motivo certo. Com o workflow já
+    // fechado, aquele não tem mais o que fazer.
     this.finish('cancelled');
+    this.claude.stop('você abortou a execução');
   }
 
   /* --------------------------------------------------------------- ligação -- */
@@ -305,6 +365,19 @@ export class Orchestrator {
     this.claude.on('tool_result', (result: ToolResult) => this.onToolResult(result));
     this.claude.on('result', (result: TurnResult) => this.onResult(result));
     this.claude.on('rate_limit', (limit: RateLimit) => this.onRateLimit(limit));
+    /*
+     * O processo morreu no meio do turno — e não só pelo botão de abortar:
+     * trocar de projeto, reiniciar o runtime e concluir um login de auth ou de
+     * MCP também derrubam o agente. Nesses caminhos o `result` do turno em
+     * andamento nunca chega, então nada encerrava o que estava na tela: bloco
+     * pulsando, skill acesa, setas animadas e "sem sinal há N minutos"
+     * crescendo, com o agente já morto. Interrompido, não concluído — daí
+     * 'cancelled', que é o estado que a tela usa para não apresentar trabalho
+     * pela metade como trabalho entregue.
+     */
+    this.claude.on('exit', () => {
+      if (this.workflow) this.finish('cancelled');
+    });
   }
 
   private onText(text: string): void {
@@ -405,13 +478,15 @@ export class Orchestrator {
 
     const artifact = artifactFromTool(tool.name, tool.input);
     if (artifact) {
-      const entry: Artifact = {
-        id: randomUUID(), name: artifact.name, kind: artifact.kind,
-        href: artifact.path, createdAt: Date.now(),
-      };
-      this.artifacts = [entry, ...this.artifacts].slice(0, 100);
-      this.emit({ type: 'block.artifact', blockId: block.id, artifact: entry });
-      this.emit({ type: 'archive.added', archive: entry });
+      // Fica de molho até o resultado da ferramenta: aqui ele só PEDIU para
+      // escrever. Veja `pendingArtifacts`.
+      this.pendingArtifacts.set(tool.id, {
+        blockId: block.id,
+        artifact: {
+          id: randomUUID(), name: artifact.name, kind: artifact.kind,
+          href: artifact.path, createdAt: Date.now(),
+        },
+      });
     }
 
     if (this.workflow) {
@@ -463,6 +538,7 @@ export class Orchestrator {
     if (this.mode === 'silent') return;
     this.lastEventAt = Date.now();
     const clean = truncate(result.text.replace(/\s+/g, ' ').trim(), 200);
+    this.settleArtifact(result);
 
     // ESTA delegação terminou: o subagente entrega e o bloco dele fecha. Buscar
     // pelo id do próprio `Task` é o que faz o fechamento funcionar com vários em
@@ -495,6 +571,46 @@ export class Orchestrator {
     const block = this.blockFor(owner?.agentId ?? 'claude');
     this.log(block.id, 'error', clean);
     this.hooks.onError?.(clean);
+  }
+
+  /**
+   * A escrita que a ferramenta pediu deu certo? Então vira artefato.
+   *
+   * Duas coisas acontecem aqui, e as duas existem porque o registro era feito no
+   * PEDIDO da ferramenta: (1) edição que falhou não entra mais, e (2) o mesmo
+   * arquivo tocado quatro vezes continua sendo uma linha só no Archives, com a
+   * data do último toque, em vez de quatro linhas idênticas.
+   *
+   * O artefato também é guardado no próprio bloco: o `block.upsert` reenvia o
+   * bloco inteiro a cada reconexão, e como só os logs viviam ali, quem dava F5
+   * perdia os chips de arquivo — e o cartão final do Talking, que soma os
+   * artefatos dos blocos, saía com ZERO arquivos enquanto o Archives listava
+   * todos.
+   */
+  private settleArtifact(result: ToolResult): void {
+    const pendente = this.pendingArtifacts.get(result.id);
+    if (!pendente) return;
+    this.pendingArtifacts.delete(result.id);
+    if (result.isError) return;
+
+    const { blockId, artifact } = pendente;
+    const mesmoCaminho = (item: Artifact): boolean =>
+      normalizeDir(item.href ?? '') === normalizeDir(artifact.href ?? '');
+    const anterior = this.artifacts.find(mesmoCaminho);
+    const entry: Artifact = anterior
+      ? { ...anterior, name: artifact.name, kind: artifact.kind, createdAt: artifact.createdAt }
+      : artifact;
+
+    this.artifacts = [entry, ...this.artifacts.filter((item) => !mesmoCaminho(item))].slice(0, 100);
+
+    const doBloco = this.blocks.get(blockId)?.artifacts;
+    if (doBloco) {
+      const jaEstava = doBloco.findIndex(mesmoCaminho);
+      if (jaEstava >= 0) doBloco.splice(jaEstava, 1);
+      doBloco.push(entry);
+    }
+    this.emit({ type: 'block.artifact', blockId, artifact: entry });
+    this.emit({ type: 'archive.added', archive: entry });
   }
 
   private onResult(result: TurnResult): void {
@@ -570,6 +686,15 @@ export class Orchestrator {
     // Quem lê o resumo em voz alta é a execução. A investigação já responde
     // pelo Talking — narrar de novo seria o agente falando duas vezes.
     if (!investigacao) this.hooks.onFinish?.(state, this.lastText);
+    /*
+     * Só agora, depois do `onFinish` — que legitimamente lê o `didWork` do turno
+     * que acabou de fechar.
+     *
+     * Sem zerar, `didWork` continuava true entre execuções e o abortar respondia
+     * "Parei o agente e o terminal no meio do caminho" com absolutamente nada em
+     * andamento — a frase existe justamente para distinguir os dois casos.
+     */
+    this.toolCount = 0;
   }
 
   /**
@@ -648,7 +773,13 @@ export class Orchestrator {
   private log(blockId: string, level: LogEntry['level'], text: string): void {
     if (!text) return;
     const entry: LogEntry = { ts: Date.now(), level, text };
-    this.blocks.get(blockId)?.logs.push(entry);
+    const logs = this.blocks.get(blockId)?.logs;
+    if (logs) {
+      logs.push(entry);
+      // Descarta as mais antigas na hora do push: o array fica vivo na memória
+      // até o próximo openWorkflow() e vai inteiro em cada `block.upsert`.
+      if (logs.length > LOG_LIMIT) logs.splice(0, logs.length - LOG_LIMIT);
+    }
     this.emit({ type: 'block.log', blockId, entry });
   }
 
@@ -714,36 +845,41 @@ export class Orchestrator {
     const toBlock = `lk_${agentId}_block`;
     const toSkill = `lk_${agentId}_skill`;
 
-    this.emit({ type: 'link.activated', link: {
+    const linkBlock: Link = {
       id: toBlock, from: { kind: 'agent', id: agentId }, to: { kind: 'block', id: blockId },
       label: 'executa', color,
-    }});
-    this.activeLinks = [...new Set([...this.activeLinks, toBlock])];
+    };
+    this.emit({ type: 'link.activated', link: linkBlock });
+    this.activeLinks.set(toBlock, linkBlock);
 
     // Delegar não acende cartão de skill nenhum — e a seta de skill que estava
     // acesa antes precisa APAGAR, senão ela fica apontando para a última coisa
     // que ele fez, como se ainda estivesse fazendo.
     if (!skillId) {
       this.emit({ type: 'link.deactivated', linkId: toSkill });
-      this.activeLinks = this.activeLinks.filter((id) => id !== toSkill);
+      this.activeLinks.delete(toSkill);
       return;
     }
 
-    this.emit({ type: 'link.activated', link: {
+    const linkSkill: Link = {
       id: toSkill, from: { kind: 'agent', id: agentId }, to: { kind: 'skill', id: skillId },
       label: tool.toLowerCase(), color,
-    }});
-    this.activeLinks = [...new Set([...this.activeLinks, toSkill])];
+    };
+    this.emit({ type: 'link.activated', link: linkSkill });
+    this.activeLinks.set(toSkill, linkSkill);
   }
 
   /** Apaga as setas de um agente só — quando ele termina a parte dele. */
   private clearLinksOf(agentId: string): void {
-    const meus = this.activeLinks.filter((id) => id.startsWith(`lk_${agentId}_`));
-    meus.forEach((id) => this.emit({ type: 'link.deactivated', linkId: id }));
-    this.activeLinks = this.activeLinks.filter((id) => !meus.includes(id));
+    [...this.activeLinks.keys()]
+      .filter((id) => id.startsWith(`lk_${agentId}_`))
+      .forEach((id) => {
+        this.emit({ type: 'link.deactivated', linkId: id });
+        this.activeLinks.delete(id);
+      });
   }
   private clearLinks(): void {
-    this.activeLinks.forEach((id) => this.emit({ type: 'link.deactivated', linkId: id }));
-    this.activeLinks = [];
+    this.activeLinks.forEach((_link, id) => this.emit({ type: 'link.deactivated', linkId: id }));
+    this.activeLinks.clear();
   }
 }

@@ -95,8 +95,23 @@ export class ClaudeSession extends EventEmitter {
    * "pensando" até o fim da sessão.
    */
   private abortAsk: ((reason: Error) => void) | null = null;
+  /**
+   * O ouvinte que libera o `busy` quando um turno abandonado por ociosidade
+   * finalmente responde. Guardado porque ele precisa ser REMOVIDO se o processo
+   * morrer antes disso — senão cada timeout deixava mais um `once('result')`
+   * pendurado no emitter, e nenhum deles ia rodar.
+   */
+  private releaseOnResult: (() => void) | null = null;
 
   status: ClaudeStatus = 'stopped';
+  /**
+   * Quantas vezes este processo já foi (re)aberto.
+   *
+   * O contexto da conversa mora no PROCESSO, não aqui: cada `start()` nasce sem
+   * lembrar de nada. Quem precisa reenviar enquadramento a cada processo novo
+   * (veja `Conversation.say`) compara este número em vez de adivinhar.
+   */
+  generation = 0;
   cwd: string;
   sessionId: string | null = null;
   model: string | null = null;
@@ -110,6 +125,7 @@ export class ClaudeSession extends EventEmitter {
   start(cwd = this.cwd): void {
     this.stop();
     this.cwd = cwd;
+    this.generation += 1;
     this.setStatus('starting');
 
     const args = [
@@ -128,16 +144,39 @@ export class ClaudeSession extends EventEmitter {
       return;
     }
 
-    this.child.stdout.setEncoding('utf8');
-    this.child.stderr.setEncoding('utf8');
-    this.child.stdout.on('data', (chunk: string) => this.consume(chunk));
-    this.child.stderr.on('data', (chunk: string) => {
+    /*
+     * Os ouvintes ficam presos AO FILHO que os registrou.
+     *
+     * `start()` mata o processo antigo e sobe o novo no mesmo tick, mas o `exit`
+     * do antigo só é entregue ticks depois — quando `this.child` já é o novo.
+     * Sem esta checagem de identidade, aquele `exit` atrasado zerava a
+     * referência do processo RECÉM-ABERTO e, como o `taskkill /F` sai com
+     * código != 0, ainda punha o status em `error`: o agente novo ficava vivo e
+     * órfão enquanto todo pedido morria com "O Claude não está de pé". Vale
+     * também para o stdout, senão a saída do processo morto entrava no buffer
+     * de quem acabou de subir.
+     */
+    const child = this.child;
+    const atual = (): boolean => this.child === child;
+
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => { if (atual()) this.consume(chunk); });
+    child.stderr.on('data', (chunk: string) => {
+      if (!atual()) return;
       this.lastError = chunk.trim();
       this.emit('stderr', chunk);
     });
-    this.child.on('error', (error) => this.fail(error.message));
-    this.child.on('exit', (code) => {
+    child.on('error', (error) => { if (atual()) this.fail(error.message); });
+    child.on('exit', (code) => {
+      if (!atual()) return;
       this.child = null;
+      // Morreu debaixo de um turno: quem esperava precisa saber AGORA. Sem isto
+      // o `ask` ficava pendurado até o limite de ociosidade e, pior, o `busy`
+      // continuava true para sempre — o `result` que o liberaria não vem mais —,
+      // e daí em diante todo pedido voltava com "ainda estou terminando o
+      // pedido anterior", mesmo depois de o agente ser religado.
+      this.releaseAsk('o agente encerrou no meio do turno');
       if (code !== 0 && code !== null) this.fail(this.lastError ?? `saiu com código ${code}`);
       else this.setStatus('stopped');
       this.emit('exit', code);
@@ -152,6 +191,7 @@ export class ClaudeSession extends EventEmitter {
    * @param motivo aparece no erro de quem estava esperando uma resposta.
    */
   stop(motivo = 'o agente foi encerrado'): void {
+    const havia = this.child !== null;
     try {
       this.child?.stdin.end();
     } catch {
@@ -163,12 +203,34 @@ export class ClaudeSession extends EventEmitter {
     this.child = null;
     this.buffer = '';
     this.sessionId = null;
-    this.busy = false;
     // Quem estava esperando precisa saber agora, não daqui a quatro minutos.
+    this.releaseAsk(motivo);
+    if (this.status !== 'error') this.setStatus('stopped');
+    /*
+     * O `exit` do filho que acabamos de matar é ignorado lá em cima (ele já não
+     * é o atual), então quem anuncia que o processo se foi é o próprio `stop()`.
+     * É esse aviso que faz o orquestrador encerrar o workflow ao trocar de
+     * projeto ou reiniciar o runtime — sem ele, bloco, agente, skill e setas
+     * ficavam acesos na tela para sempre, com o agente já morto.
+     */
+    if (havia) this.emit('exit', null);
+  }
+
+  /**
+   * Desfaz o turno em voo: acorda quem esperava e devolve o `busy`.
+   *
+   * Um só lugar porque as duas mortes do processo — a pedida (`stop`) e a
+   * espontânea (`exit`) — deixam exatamente o mesmo estado para trás.
+   */
+  private releaseAsk(motivo: string): void {
+    this.busy = false;
+    if (this.releaseOnResult) {
+      this.off('result', this.releaseOnResult);
+      this.releaseOnResult = null;
+    }
     const desistir = this.abortAsk;
     this.abortAsk = null;
     desistir?.(new Error(motivo));
-    if (this.status !== 'error') this.setStatus('stopped');
   }
 
   /**
@@ -217,7 +279,12 @@ export class ClaudeSession extends EventEmitter {
         // pergunta — era o pior efeito do limite antigo, porque as respostas
         // trocavam de lugar sem ninguém perceber.
         cleanup();
-        this.once('result', () => { this.busy = false; });
+        // Nomeado e guardado: se o processo morrer antes da resposta atrasada,
+        // `releaseAsk` tira este ouvinte do emitter. Anônimo, ele ficava lá para
+        // sempre, mais um a cada timeout.
+        const release = (): void => { this.busy = false; this.releaseOnResult = null; };
+        this.releaseOnResult = release;
+        this.once('result', release);
         reject(new Error('o agente parou de dar sinal de vida'));
       };
 

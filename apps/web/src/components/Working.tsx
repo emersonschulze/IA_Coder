@@ -12,7 +12,12 @@ const STATE_TAG: Record<string, string> = {
   cancelled: '■ ABORTADO',
 };
 
-export function Working() {
+interface Props {
+  /** Abre o arquivo gerado com o programa padrão do Windows (comando `artifact.open`). */
+  onOpenArtifact: (path: string, reveal?: boolean) => void;
+}
+
+export function Working({ onOpenArtifact }: Props) {
   const workflow = useSession((state) => state.workflow);
   const blocks = useSession((state) => state.blocks);
   const agents = useSession((state) => state.agents);
@@ -88,6 +93,7 @@ export function Working() {
               agent={agentById.get(block.agentId)}
               skill={block.skillId ? skillById.get(block.skillId) : undefined}
               position={index + 1}
+              onOpenArtifact={onOpenArtifact}
             />
           ))
         )}

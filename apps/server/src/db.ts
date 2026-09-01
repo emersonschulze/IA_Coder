@@ -56,14 +56,26 @@ async function attempt(): Promise<DbState> {
   }
 
   try {
-    // Duas perguntas: o banco atende? E ele tem as tabelas que o Tree precisa?
-    const { rows } = await pool.query<{ exists: string | null }>(
-      `SELECT to_regclass('public.subjects')::text AS exists`,
+    // Três perguntas: o banco atende? Ele tem as tabelas que o Tree precisa? E o
+    // Tree já é por projeto? A última importa porque as funções de busca passaram
+    // a receber o caminho do projeto — num banco sem a 002 elas nem existem com
+    // essa assinatura, e o erro que aparece ("function does not exist") não diz a
+    // ninguém que o conserto é rodar uma migração.
+    const { rows } = await pool.query<{ exists: string | null; scoped: string | null }>(
+      `SELECT to_regclass('public.subjects')::text AS exists,
+              to_regclass('public.subjects_project_slug_idx')::text AS scoped`,
     );
     if (!rows[0]?.exists) {
       console.warn(`[db] conectado em ${mask(url)}, mas a tabela "subjects" não existe.`);
       console.warn('[db] O banco foi criado antes do Tree de dois níveis. Aplique a migração:');
       console.warn('[db]   docker exec -i ia_coder_postgres psql -U iacoder -d iacoder < db/migrations/001_tree_dois_niveis.sql');
+      setState('schema-missing');
+      return state;
+    }
+    if (!rows[0]?.scoped) {
+      console.warn(`[db] conectado em ${mask(url)}, mas o Tree ainda é global (sem escopo de projeto).`);
+      console.warn('[db] Aplique a migração:');
+      console.warn('[db]   docker exec -i ia_coder_postgres psql -U iacoder -d iacoder < db/migrations/002_tree_por_projeto.sql');
       setState('schema-missing');
       return state;
     }
@@ -129,6 +141,47 @@ export async function query<T extends pg.QueryResultRow = pg.QueryResultRow>(
     // Pode ter caído entre uma consulta e outra: reavalia sem derrubar nada.
     void attempt();
     throw error;
+  }
+}
+
+/** Uma consulta amarrada a uma conexão específica — a da transação em curso. */
+export type TxQuery = <T extends pg.QueryResultRow = pg.QueryResultRow>(
+  text: string,
+  params?: unknown[],
+) => Promise<T[]>;
+
+/**
+ * Roda várias escritas como uma coisa só.
+ *
+ * `query()` pega uma conexão qualquer do pool a cada chamada, sem `BEGIN`: uma
+ * sequência de INSERTs que morre no meio deixa metade gravada. Aqui o mesmo
+ * client atende tudo, e ou entra tudo ou não entra nada.
+ */
+export async function withTransaction<T>(run: (tx: TxQuery) => Promise<T>): Promise<T> {
+  if (!pool || state !== 'ok') throw new Error('o banco não está disponível');
+  const client = await pool.connect();
+  const tx: TxQuery = <R extends pg.QueryResultRow = pg.QueryResultRow>(
+    text: string,
+    params: unknown[] = [],
+  ): Promise<R[]> => client.query<R>(text, params).then((result) => result.rows);
+
+  try {
+    await client.query('BEGIN');
+    const result = await run(tx);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    // A conexão pode já ter morrido — desfazer é a intenção, não uma garantia.
+    try {
+      await client.query('ROLLBACK');
+    } catch {
+      /* conexão perdida: o Postgres desfaz sozinho ao encerrar a sessão */
+    }
+    console.error('[db] transação desfeita:', (error as Error).message);
+    void attempt();
+    throw error;
+  } finally {
+    client.release();
   }
 }
 

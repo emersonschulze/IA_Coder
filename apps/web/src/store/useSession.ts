@@ -97,6 +97,15 @@ const patchById = <T extends { id: string }>(list: T[], patch: Partial<T> & { id
 /** Mantém o log enxuto: só as últimas 200 linhas por bloco ficam na memória. */
 const LOG_LIMIT = 200;
 
+/**
+ * Mesmo teto que o servidor aplica em `settleArtifact` (orchestrator.ts).
+ *
+ * Sem ele, uma execução que toca 400 arquivos deixava 400 cartões no painel
+ * enquanto o servidor lembrava de 100 — e o `archives.sync` da próxima conexão
+ * fazia os antigos sumirem sem que evento nenhum tivesse dito que sumiram.
+ */
+const ARCHIVE_LIMIT = 100;
+
 export const useSession = create<SessionState>((set) => ({
   connection: 'connecting',
   connectionDetail: '',
@@ -120,7 +129,7 @@ export const useSession = create<SessionState>((set) => ({
   mcp: null,
   mcpLogin: { server: null, lines: [], urls: [], running: false },
   voice: null,
-  conversation: { active: false, thinking: false, pending: null },
+  conversation: { active: false, thinking: false, executing: false, pending: null },
   turns: [],
   lastSay: null,
   result: null,
@@ -199,10 +208,15 @@ export const useSession = create<SessionState>((set) => ({
 
         case 'block.upsert': {
           const exists = state.blocks.some((block) => block.id === event.block.id);
+          // O bloco chega do servidor com o log inteiro, e o upsert de
+          // reconexão (syncCatalog) devolvia tudo de volta ao estado — furando
+          // o LOG_LIMIT que o ramo `block.log` respeita e deixando o cartão
+          // renderizar milhares de linhas. Corta na entrada, igual ao outro ramo.
+          const incoming = { ...event.block, logs: event.block.logs.slice(-LOG_LIMIT) };
           return {
             blocks: exists
-              ? state.blocks.map((block) => (block.id === event.block.id ? event.block : block))
-              : [...state.blocks, event.block].sort((a, b) => a.index - b.index),
+              ? state.blocks.map((block) => (block.id === incoming.id ? incoming : block))
+              : [...state.blocks, incoming].sort((a, b) => a.index - b.index),
           };
         }
 
@@ -219,10 +233,18 @@ export const useSession = create<SessionState>((set) => ({
           };
 
         case 'block.artifact':
+          // Mesmo arquivo tocado de novo mantém o mesmo id e volta com a data
+          // nova: substitui em vez de virar um segundo chip idêntico no cartão.
           return {
             blocks: state.blocks.map((block) =>
               block.id === event.blockId
-                ? { ...block, artifacts: [...block.artifacts, event.artifact] }
+                ? {
+                    ...block,
+                    artifacts: [
+                      ...block.artifacts.filter((item) => item.id !== event.artifact.id),
+                      event.artifact,
+                    ],
+                  }
                 : block,
             ),
           };
@@ -256,7 +278,13 @@ export const useSession = create<SessionState>((set) => ({
           return { archives: event.archives };
 
         case 'archive.added':
-          return { archives: [event.archive, ...state.archives] };
+          // Idem: uma linha por arquivo, no topo, com a data do último toque.
+          return {
+            archives: [
+              event.archive,
+              ...state.archives.filter((item) => item.id !== event.archive.id),
+            ].slice(0, ARCHIVE_LIMIT),
+          };
 
         case 'assistant.say':
           return { assistant: { text: event.text, at: Date.now() } };

@@ -160,11 +160,13 @@ CREATE INDEX ON usage_events (session_id, ts DESC);
 
 CREATE TABLE subjects (
   id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  slug         text UNIQUE NOT NULL,
+  slug         text NOT NULL,
   title        text NOT NULL,
   summary      text NOT NULL,              -- o aprendizado, em poucas linhas
   persona      text,                        -- quem pediu: "Dev A", "Analista"…
-  project_path text,
+  -- O Tree é por projeto: a ferramenta troca de projeto contra o mesmo banco, e
+  -- slug único global fazia um projeto sobrescrever o assunto homônimo do outro.
+  project_path text NOT NULL DEFAULT '',
   workflow_id  uuid REFERENCES workflows(id) ON DELETE SET NULL,
   tags         text[] NOT NULL DEFAULT '{}',
   content      text,                        -- texto que gerou o embedding
@@ -174,6 +176,10 @@ CREATE TABLE subjects (
   updated_at   timestamptz NOT NULL DEFAULT now()
 );
 
+-- O nome importa: é por ele que o servidor detecta, no boot, um banco que ainda
+-- não recebeu a migração 002 (apps/server/src/db.ts).
+CREATE UNIQUE INDEX subjects_project_slug_idx ON subjects (project_path, slug);
+CREATE INDEX subjects_project_updated_idx ON subjects (project_path, updated_at DESC);
 CREATE INDEX subjects_embedding_idx
   ON subjects USING hnsw (embedding vector_cosine_ops)
   WITH (m = 16, ef_construction = 64);
@@ -225,19 +231,21 @@ CREATE INDEX ON component_links (to_component);
 -- ------------------------------------------------------------------ busca --
 
 -- Assuntos semanticamente próximos de um embedding (o pedido do usuário).
-CREATE OR REPLACE FUNCTION subject_search(query vector(768), k integer DEFAULT 5)
+-- `project` sem valor varre tudo; o servidor sempre manda o projeto aberto.
+CREATE OR REPLACE FUNCTION subject_search(query vector(768), k integer DEFAULT 5, project text DEFAULT NULL)
 RETURNS TABLE (id uuid, slug text, title text, summary text, similarity real)
 LANGUAGE sql STABLE AS $$
   SELECT s.id, s.slug, s.title, s.summary, 1 - (s.embedding <=> query) AS similarity
   FROM subjects s
   WHERE s.embedding IS NOT NULL
+    AND (project IS NULL OR s.project_path = project)
   ORDER BY s.embedding <=> query
   LIMIT k;
 $$;
 
 -- Alternativa sem embeddings: semelhança de texto (pg_trgm). É o que roda
 -- quando o Ollama não está de pé — pior, mas o Tree continua útil.
-CREATE OR REPLACE FUNCTION subject_search_text(query text, k integer DEFAULT 5)
+CREATE OR REPLACE FUNCTION subject_search_text(query text, k integer DEFAULT 5, project text DEFAULT NULL)
 RETURNS TABLE (id uuid, slug text, title text, summary text, similarity real)
 LANGUAGE sql STABLE AS $$
   SELECT t.id, t.slug, t.title, t.summary, t.sim
@@ -250,6 +258,7 @@ LANGUAGE sql STABLE AS $$
              word_similarity(query, s.summary)
            ) AS sim
     FROM subjects s
+    WHERE project IS NULL OR s.project_path = project
   ) t
   WHERE t.sim > 0.12
   ORDER BY t.sim DESC

@@ -114,6 +114,16 @@ export function ConversationPanel({
   const [typed, setTyped] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [saved, setSaved] = useState(false);
+  /*
+   * Já respondi este plano.
+   *
+   * Sem isto o clique não deixava rastro nenhum na tela: com o servidor fora do
+   * ar, o `IaCoderSocket` guarda o comando na fila e o entrega sozinho na
+   * reconexão — o usuário concluía que não passou, saía da frente do
+   * computador, e 15s depois a execução começava sem ninguém olhando. O botão
+   * agora ou está bloqueado (offline) ou diz que a resposta saiu.
+   */
+  const [answered, setAnswered] = useState(false);
   const feed = useRef<HTMLDivElement>(null);
   const bars = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -139,6 +149,8 @@ export function ConversationPanel({
    */
   const updating = reused[0] ?? null;
   useEffect(() => setSaved(false), [workflowState]);
+  // Plano novo (ou plano que sumiu) libera os botões de novo.
+  useEffect(() => setAnswered(false), [conversation.pending]);
 
   const addFiles = useCallback((files: FileList | File[] | null) => {
     const images = Array.from(files ?? []).filter((file) => file.type.startsWith('image/'));
@@ -213,14 +225,16 @@ export function ConversationPanel({
       return;
     }
 
-    if (conversation.thinking) return;
+    // Durante uma execução o servidor não atende a conversa: a pergunta
+    // sequestraria o turno da execução. Não adianta mandar.
+    if (conversation.thinking || conversation.executing) return;
     const images = attachments.length > 0
       ? attachments.map(({ mediaType, data, name }) => ({ mediaType, data, name }))
       : undefined;
     onInput(value || 'Veja a imagem em anexo.', images);
     setTyped('');
     setAttachments([]);
-  }, [typed, attachments, conversation.thinking, onInput, onOpenSubjectForm]);
+  }, [typed, attachments, conversation.thinking, conversation.executing, onInput, onOpenSubjectForm]);
 
   // Ctrl+Enter envia de qualquer lugar da tela — o velho hábito continua valendo.
   useEffect(() => {
@@ -298,6 +312,14 @@ export function ConversationPanel({
   // De onde sai o som importa: "mudo" explica por que você não ouve nada.
   const voiceBadge = out.source === 'piper' ? '' : ` · voz ${out.source}`;
 
+  // Por que os botões do plano estão bloqueados, quando estão. `null` = livres.
+  const planTitle =
+    connection !== 'open'
+      ? 'sem link com o servidor'
+      : answered
+        ? 'resposta já enviada — esperando o servidor'
+        : null;
+
   return (
     <Panel
       title="Talking"
@@ -349,6 +371,9 @@ export function ConversationPanel({
               ler arquivo é trabalho, e trabalho não mora na conversa. Aqui fica
               só o sinal de que ele está pensando. */}
           {conversation.thinking && <div className={styles.thinking}>pensando…</div>}
+          {conversation.executing && !conversation.thinking && (
+            <div className={styles.thinking}>executando — te aviso quando terminar</div>
+          )}
 
           {result && (result.artifacts.length > 0 || canSave) && (
             <div className={styles.resultRow}>
@@ -428,14 +453,38 @@ export function ConversationPanel({
                 ))}
               </ol>
               <div className={styles.confirm}>
-                <button type="button" className={styles.go} onClick={() => onConfirm(true)}>
+                <button
+                  type="button"
+                  className={styles.go}
+                  disabled={connection !== 'open' || answered}
+                  title={planTitle ?? 'Executa o plano acima'}
+                  onClick={() => {
+                    setAnswered(true);
+                    onConfirm(true);
+                  }}
+                >
                   ▶ Pode ir
                 </button>
-                <button type="button" className={styles.no} onClick={() => onConfirm(false)}>
+                <button
+                  type="button"
+                  className={styles.no}
+                  disabled={connection !== 'open' || answered}
+                  title={planTitle ?? 'Descarta o plano — nada é executado'}
+                  onClick={() => {
+                    setAnswered(true);
+                    onConfirm(false);
+                  }}
+                >
                   ✕ Agora não
                 </button>
               </div>
-              <p className={styles.tip}>Ou responda: “pode mandar”.</p>
+              <p className={styles.tip}>
+                {connection !== 'open'
+                  ? 'Sem link com o servidor — a resposta só sai quando a conexão voltar.'
+                  : answered
+                    ? 'Resposta enviada — esperando o servidor.'
+                    : 'Ou responda: “pode mandar”.'}
+              </p>
             </div>
           )}
         </div>
@@ -510,14 +559,17 @@ export function ConversationPanel({
             disabled={
               (!typed.trim() && attachments.length === 0) ||
               connection !== 'open' ||
-              conversation.thinking
+              conversation.thinking ||
+              conversation.executing
             }
             title={
               connection !== 'open'
                 ? 'sem link com o servidor'
-                : conversation.thinking
-                  ? 'espera ele responder…'
-                  : 'Enviar (Enter)'
+                : conversation.executing
+                  ? 'ele está executando — use o Abortar se quiser parar'
+                  : conversation.thinking
+                    ? 'espera ele responder…'
+                    : 'Enviar (Enter)'
             }
           >
             ➤

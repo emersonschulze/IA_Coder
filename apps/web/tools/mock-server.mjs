@@ -68,7 +68,7 @@ wss.on('connection', (socket) => {
     weekPct: 34, weekResetsAt: Date.now() + 4 * 24 * 60 * 60_000,
   }});
 
-  const publishConversation = () => send({ type: 'conversation.state', state: { active: false, thinking: false, pending } });
+  const publishConversation = () => send({ type: 'conversation.state', state: { active: false, thinking: false, executing: false, pending } });
   const agentSays = (text) => {
     send({ type: 'conversation.turn', role: 'agent', text });
     send({ type: 'conversation.say', text });
@@ -188,7 +188,7 @@ wss.on('connection', (socket) => {
     if (command.type !== 'conversation.input') return;
 
     send({ type: 'conversation.turn', role: 'user', text: command.text, images: command.images });
-    send({ type: 'conversation.state', state: { active: false, thinking: true, pending } });
+    send({ type: 'conversation.state', state: { active: false, thinking: true, executing: false, pending } });
 
     // Pensar não é ficar parado. Antes de responder ele lê o projeto, e isso
     // aparece no CENTRO como qualquer outro trabalho — só que marcado como

@@ -1,4 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
+import { resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
@@ -76,16 +77,44 @@ if ($chosen) { Write-Output "<<PASTA>>$chosen" }
   return match ? match[1].trim() : null;
 }
 
+/** Mesma normalização dos dois lados, senão nada casa no Windows. */
+const canonico = (caminho: string): string =>
+  resolve(caminho).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+
+/**
+ * Extensões que o `start` do Windows não abre: EXECUTA.
+ *
+ * Revelar na pasta (`explorer /select`) é inofensivo com qualquer arquivo; abrir
+ * no programa associado, não.
+ */
+const EXECUTAVEIS = /\.(exe|bat|cmd|com|scr|ps1|psm1|msi|lnk|vbs|js|jse|wsf|reg)$/i;
+
 /**
  * Abre um artefato com o programa padrão do Windows.
  *
  * O navegador não abre caminho local (`file://` é bloqueado), então quem abre é
  * o servidor — que roda na sua máquina. `explorer.exe /select` revela o arquivo
  * na pasta; sem a flag, abre no programa associado.
+ *
+ * @param dentroDe as pastas em que o alvo pode estar. O caminho chega cru pelo
+ *   WebSocket e vira uma linha de `start`: sem esta cerca, qualquer coisa do
+ *   disco — um instalador recém-baixado, por exemplo — seria executada sem uma
+ *   única pergunta.
  */
-export function openArtifact(path: string, reveal = false): void {
+export function openArtifact(path: string, reveal: boolean, dentroDe: string[]): void {
   if (process.platform !== 'win32') {
     throw new Error('Abrir arquivos assim só funciona no Windows.');
+  }
+  const alvo = canonico(path);
+  const dentro = dentroDe.some((raiz) => {
+    const base = canonico(raiz);
+    return alvo === base || alvo.startsWith(`${base}/`);
+  });
+  if (!dentro) {
+    throw new Error(`Só abro o que está na pasta do projeto ou na de artefatos: ${path}`);
+  }
+  if (!reveal && EXECUTAVEIS.test(alvo)) {
+    throw new Error(`Isto é um executável; abri a pasta em vez de rodar: ${path}`);
   }
   const safe = path.replace(/"/g, '');
   const line = reveal

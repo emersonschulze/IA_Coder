@@ -65,6 +65,19 @@ const FRAME = [
  */
 export class Conversation {
   private history: { role: 'user' | 'agent'; text: string }[] = [];
+  /**
+   * Em qual PROCESSO do Claude o enquadramento já foi entregue.
+   *
+   * O `FRAME` mora no contexto do processo, não neste histórico — e o processo é
+   * derrubado e resubido em vários caminhos (trocar de projeto, abortar,
+   * reiniciar o runtime, login de auth ou de MCP). Enquanto o critério era
+   * "primeira mensagem da conversa", o processo novo nascia sem regra nenhuma e
+   * nunca mais recebia: o agente voltava a responder em prosa, `parseReply` caía
+   * no plano B, tudo virava `mode: 'chat'` e o cartão de plano com o "Pode ir" —
+   * a única porta de execução da ferramenta — não aparecia mais até reiniciar o
+   * servidor.
+   */
+  private framedGeneration = -1;
   /** Plano aguardando o "pode ir". */
   pending: Plan | null = null;
 
@@ -77,6 +90,7 @@ export class Conversation {
   reset(): void {
     this.history = [];
     this.pending = null;
+    this.framedGeneration = -1;
   }
 
   /**
@@ -91,14 +105,30 @@ export class Conversation {
   async say(text: string, images?: ImageAttachment[]): Promise<Reply> {
     this.history.push({ role: 'user', text });
 
-    const isFirst = this.history.length === 1;
-    const prompt = isFirst ? `${FRAME}\n\nO desenvolvedor disse: "${text}"` : `O desenvolvedor disse: "${text}"`;
+    // Processo novo, contexto zerado: reenquadra e leva junto um resumo curto do
+    // que já foi conversado, senão ele responde sem saber do que se trata.
+    const enquadradoAntes = this.framedGeneration;
+    const precisaEnquadrar = enquadradoAntes !== this.claude.generation;
+    const prompt = precisaEnquadrar
+      ? [FRAME, this.recap(), `O desenvolvedor disse: "${text}"`].filter(Boolean).join('\n\n')
+      : `O desenvolvedor disse: "${text}"`;
+    this.framedGeneration = this.claude.generation;
 
     // 4 minutos SEM SINAL DE VIDA, não 4 minutos de trabalho: cada arquivo lido
     // renova o prazo. O limite antigo era de duração total e derrubava análise
     // de repositório grande no meio, dizendo que o agente demorou demais quando
     // ele estava trabalhando.
-    const answer = await this.claude.ask(prompt, 240_000, images);
+    let answer: string;
+    try {
+      answer = await this.claude.ask(prompt, 240_000, images);
+    } catch (error) {
+      // Deu errado: não dá para afirmar que o enquadramento chegou lá dentro —
+      // um `ask` recusado de saída (turno anterior ainda aberto) não envia nada.
+      // Reenviar de graça custa alguns tokens; deixar o processo sem regra
+      // nenhuma custa o cartão de plano, que é a única porta de execução.
+      this.framedGeneration = enquadradoAntes;
+      throw error;
+    }
     const reply = parseReply(answer);
 
     // O que ele lembra é o que ele DISSE por inteiro, não o resumo falado:
@@ -106,6 +136,20 @@ export class Conversation {
     this.history.push({ role: 'agent', text: reply.text ?? reply.say });
     this.pending = reply.mode === 'plan' ? (reply.plan ?? null) : null;
     return reply;
+  }
+
+  /**
+   * O que já foi conversado, em poucas linhas, para um processo que não estava
+   * aqui. Só as últimas trocas: o objetivo é ele não recomeçar do zero, não
+   * reconstruir a conversa inteira.
+   */
+  private recap(): string {
+    const anteriores = this.history.slice(-7, -1);
+    if (anteriores.length === 0) return '';
+    return [
+      'Retomando (o processo foi reaberto e você perdeu o contexto). O que já foi dito:',
+      ...anteriores.map(({ role, text }) => `- ${role === 'user' ? 'Dev' : 'Você'}: ${text.slice(0, 400)}`),
+    ].join('\n');
   }
 
   /** Vira o plano confirmado em um pedido de execução para o workflow. */
