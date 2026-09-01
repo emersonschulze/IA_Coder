@@ -12,11 +12,13 @@ import type {
   Listing,
   ProjectState,
   SessionInfo,
+  Settings,
   Skill,
   SubjectDetail,
   SubjectGraph,
   TreeStatus,
   Usage,
+  VoiceOption,
   Workflow,
 } from '@/types/domain';
 import type { ConnectionState, ServerEvent } from '@/types/protocol';
@@ -56,6 +58,12 @@ interface SessionState {
   mcpLogin: { server: string | null; lines: string[]; urls: string[]; running: boolean; ok?: boolean };
   /** Serviços de voz local que estão de pé. */
   voice: VoiceHealth | null;
+  /** Banco, Redis e voz — o que a tela de Configurações edita. */
+  settings: Settings | null;
+  /** Última tentativa de aplicar uma mudança de banco: deu certo? */
+  settingsDbApplied: boolean | null;
+  /** Vozes do Piper que dá para escolher, e quais já estão baixadas. */
+  voiceOptions: VoiceOption[];
   conversation: ConversationState;
   turns: { role: 'user' | 'agent'; text: string; at: number; images?: ImageAttachment[] }[];
   /** Última frase a ser falada em voz alta. */
@@ -129,6 +137,9 @@ export const useSession = create<SessionState>((set) => ({
   mcp: null,
   mcpLogin: { server: null, lines: [], urls: [], running: false },
   voice: null,
+  settings: null,
+  settingsDbApplied: null,
+  voiceOptions: [],
   conversation: { active: false, thinking: false, executing: false, pending: null },
   turns: [],
   lastSay: null,
@@ -329,6 +340,15 @@ export const useSession = create<SessionState>((set) => ({
 
         case 'mcp.state':
           return { mcp: event.mcp };
+
+        case 'settings.state':
+          return {
+            settings: event.settings,
+            settingsDbApplied: event.dbApplied ?? state.settingsDbApplied,
+          };
+
+        case 'voice.options':
+          return { voiceOptions: event.options };
 
         case 'mcp.login.line':
           return {

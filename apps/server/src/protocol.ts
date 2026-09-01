@@ -218,6 +218,39 @@ export interface ProjectState {
 export interface DirEntry { name: string; path: string; isProject: boolean }
 export interface Listing { path: string; parent: string | null; entries: DirEntry[]; error?: string }
 
+/**
+ * Onde o servidor busca cada peça de infraestrutura — o que a interface
+ * mostra na tela de Configurações. Isto NÃO sobe container nenhum: só diz a
+ * este processo Node onde bater. Quem sobe Postgres/Redis/Whisper/Piper
+ * continua sendo o `docker compose` (ou outra máquina, se for o caso).
+ */
+export interface DatabaseSettings {
+  host: string; port: number; user: string; password: string; name: string;
+}
+export interface RedisSettings {
+  host: string; port: number; password: string;
+}
+export interface VoiceSettings {
+  whisperUrl: string; piperUrl: string; piperVoice: string; wakeWord: string;
+}
+export interface Settings {
+  database: DatabaseSettings;
+  redis: RedisSettings;
+  voice: VoiceSettings;
+}
+/** Um patch de configuração — só o que a pessoa mudou na tela. */
+export interface SettingsPatch {
+  database?: Partial<DatabaseSettings>;
+  redis?: Partial<RedisSettings>;
+  voice?: Partial<VoiceSettings>;
+}
+/** Uma voz do Piper que dá para escolher — baixada ou não ainda. */
+export interface VoiceOption {
+  id: string;
+  label: string;
+  installed: boolean;
+}
+
 export type ServerEvent =
   | { type: 'session.hello'; session: SessionInfo }
   | { type: 'agents.sync'; agents: Agent[] }
@@ -261,6 +294,13 @@ export type ServerEvent =
   | { type: 'mcp.state'; mcp: McpState }
   | { type: 'mcp.login.line'; server: string; line: string }
   | { type: 'mcp.login.done'; server: string; ok: boolean; urls: string[] }
+  /**
+   * A configuração atual (banco, Redis, voz). `dbApplied`/`error` contam se a
+   * última tentativa de aplicar um patch de banco funcionou — reconectar pode
+   * falhar (endereço errado), e a tela precisa saber para não fingir sucesso.
+   */
+  | { type: 'settings.state'; settings: Settings; dbApplied?: boolean; error?: string }
+  | { type: 'voice.options'; options: VoiceOption[]; error?: string }
   | { type: 'pong' }
   | { type: 'error'; message: string };
 
@@ -298,4 +338,13 @@ export type ClientCommand =
    * Aqui o título e o contexto são seus; nada é inferido.
    */
   | { type: 'knowledge.manual'; title: string; summary: string; tags?: string[] }
+  /** Pede a configuração atual — a tela de Configurações chama isto ao abrir. */
+  | { type: 'settings.get' }
+  /**
+   * Grava um patch e aplica na hora: banco e Redis reconectam sem reiniciar o
+   * processo, voz passa a valer no próximo áudio.
+   */
+  | { type: 'settings.save'; patch: SettingsPatch }
+  /** Lista as vozes do Piper que dá para escolher (baixada ou não). */
+  | { type: 'voice.list' }
   | { type: 'ping' };

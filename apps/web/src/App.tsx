@@ -5,6 +5,7 @@ import { AuthGate } from '@/components/AuthGate';
 import { ConversationPanel } from '@/components/ConversationPanel';
 import { McpGate } from '@/components/McpGate';
 import { ProjectPicker } from '@/components/ProjectPicker';
+import { SettingsPanel } from '@/components/SettingsPanel';
 import { SubjectDialog } from '@/components/SubjectDialog';
 import { SkillsPanel } from '@/components/SkillsPanel';
 import { StatusArchivesPanel } from '@/components/StatusArchivesPanel';
@@ -15,7 +16,7 @@ import { Working } from '@/components/Working';
 import { useSpeechOutput } from '@/hooks/useSpeechOutput';
 import { IaCoderSocket } from '@/lib/ws';
 import { selectIsFocusing, useSession } from '@/store/useSession';
-import type { ImageAttachment } from '@/types/domain';
+import type { ImageAttachment, SettingsPatch } from '@/types/domain';
 import styles from './App.module.css';
 
 export default function App() {
@@ -30,6 +31,7 @@ export default function App() {
   const socket = useRef<IaCoderSocket | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   /** `null` = fechado. String = aberto, com o nome já sugerido. */
   const [subjectForm, setSubjectForm] = useState<string | null>(null);
 
@@ -160,6 +162,19 @@ export default function App() {
     socket.current?.send({ type: 'runtime.restart', target: 'both' });
   }, []);
 
+  const openSettings = useCallback(() => {
+    socket.current?.send({ type: 'settings.get' });
+    setSettingsOpen(true);
+  }, []);
+
+  const saveSettings = useCallback((patch: SettingsPatch) => {
+    socket.current?.send({ type: 'settings.save', patch });
+  }, []);
+
+  const listVoices = useCallback(() => {
+    socket.current?.send({ type: 'voice.list' });
+  }, []);
+
   const stageClass = useMemo(
     () => [styles.stage, focusing ? styles.focusing : ''].filter(Boolean).join(' '),
     [focusing],
@@ -180,6 +195,7 @@ export default function App() {
           conversationActive={conversationActive}
           onToggleConversation={() => (conversationActive ? stopConversation() : startConversation())}
           onOpenMcp={() => setMcpOpen(true)}
+          onOpenSettings={openSettings}
         />
 
         <div className={stageClass}>
@@ -220,6 +236,14 @@ export default function App() {
           onLoginWindow={openMcpLoginWindow}
           onRecheck={recheckMcp}
           onClose={closeMcp}
+        />
+      )}
+
+      {settingsOpen && (
+        <SettingsPanel
+          onSave={saveSettings}
+          onListVoices={listVoices}
+          onClose={() => setSettingsOpen(false)}
         />
       )}
 

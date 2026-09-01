@@ -24,8 +24,10 @@ import type {
 } from './protocol.js';
 import { ShellSession } from './shell.js';
 import { Conversation, soundsLikeNo, soundsLikeYes } from './conversation.js';
-import { checkVoice, matchesWake, synthesize, transcribe, voiceHealth, wakeWord } from './voice.js';
+import { checkVoice, listVoices, matchesWake, synthesize, transcribe, voiceHealth, wakeWord } from './voice.js';
 import { fetchAccountUsage } from './usage.js';
+import { getSettings, saveSettings } from './settings.js';
+import type { SettingsPatch } from './protocol.js';
 
 const startedAt = Date.now();
 const VERSION = '0.3.0';
@@ -722,7 +724,7 @@ async function handle(client: WebSocket, command: ClientCommand): Promise<void> 
       if (conversationActive) return publishConversation();
       conversationActive = true;
       publishConversation();
-      agentSays(`Estou te ouvindo. Comece falando "${wakeWord}".`);
+      agentSays(`Estou te ouvindo. Comece falando "${wakeWord()}".`);
       return;
 
     case 'conversation.stop':
@@ -985,6 +987,48 @@ async function handle(client: WebSocket, command: ClientCommand): Promise<void> 
     case 'agent.inspect':
       return; // as setas do momento já são publicadas pelo orquestrador
 
+    case 'settings.get':
+      return send(client, { type: 'settings.state', settings: getSettings() });
+
+    /**
+     * Grava e aplica na hora — sem reiniciar o processo.
+     *
+     * Banco reconecta de verdade (`closeDb` + `initDb` com a URL nova): o pool
+     * antigo cai e um novo sobe já apontando para o endereço da tela. Redis
+     * só grava por enquanto — o servidor ainda não usa (ver ESTADO.md). Voz é
+     * lida a cada chamada (`getSettings().voice`), então já vale na próxima
+     * fala, sem passo nenhum aqui.
+     */
+    case 'settings.save': {
+      const patch: SettingsPatch = command.patch;
+      const next = saveSettings(patch);
+      let dbApplied: boolean | undefined;
+
+      if (patch.database) {
+        await closeDb();
+        const state = await initDb((dbNext) => {
+          console.log(`[db] estado: ${dbNext}`);
+          void publishTree();
+        });
+        dbApplied = state === 'ok';
+        void publishTree();
+      }
+      if (patch.voice) {
+        void checkVoice().then((health) =>
+          broadcast({ type: 'voice.health', health: { ...health, wakeWord: wakeWord() } }));
+      }
+
+      broadcast({ type: 'settings.state', settings: next, dbApplied });
+      return;
+    }
+
+    case 'voice.list':
+      try {
+        return send(client, { type: 'voice.options', options: await listVoices() });
+      } catch (error) {
+        return send(client, { type: 'voice.options', options: [], error: (error as Error).message });
+      }
+
     default:
       return;
   }
@@ -1065,7 +1109,8 @@ wss.on('connection', (client) => {
     send(client, { type: 'tree.subjects', graph, status: dbState() }));
   send(client, { type: 'auth.state', auth });
   send(client, { type: 'mcp.state', mcp });
-  send(client, { type: 'voice.health', health: { ...voiceHealth(), wakeWord } });
+  send(client, { type: 'voice.health', health: { ...voiceHealth(), wakeWord: wakeWord() } });
+  send(client, { type: 'settings.state', settings: getSettings() });
   // A conversa até aqui, antes do estado: sem ela, quem recarrega a página vê o
   // cartão do plano com os botões "Pode ir / Agora não" pairando sobre um feed
   // vazio — aprova-se sem enxergar uma linha do que levou até ali.
@@ -1162,7 +1207,7 @@ const heartbeat = setInterval(() => {
   orchestrator.publishUsage();
   publishProject();
   void checkVoice().then((health) =>
-    broadcast({ type: 'voice.health', health: { ...health, wakeWord } }));
+    broadcast({ type: 'voice.health', health: { ...health, wakeWord: wakeWord() } }));
 }, 60_000);
 
 const shutdown = (): void => {

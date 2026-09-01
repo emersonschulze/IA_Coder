@@ -14,6 +14,8 @@ interface Props {
   onToggleConversation: () => void;
   /** Abre a lista de servidores MCP — quem está de pé e quem precisa de login. */
   onOpenMcp: () => void;
+  /** Abre a tela de banco, Redis e voz. */
+  onOpenSettings: () => void;
 }
 
 /** Como cada estado dos processos aparece na barra. */
@@ -41,6 +43,7 @@ export function Topbar({
   conversationActive,
   onToggleConversation,
   onOpenMcp,
+  onOpenSettings,
 }: Props) {
   const connection = useSession((state) => state.connection);
   const detail = useSession((state) => state.connectionDetail);
@@ -145,6 +148,9 @@ export function Topbar({
         </button>
         <button type="button" className={styles.action} onClick={onRestart} title="Reabrir shell e Claude na pasta do projeto">
           ⟳
+        </button>
+        <button type="button" className={styles.action} onClick={onOpenSettings} title="Banco, Redis e voz">
+          ⚙
         </button>
         {/*
           Também vale enquanto ele só "pensa".

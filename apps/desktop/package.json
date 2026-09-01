@@ -1,0 +1,67 @@
+{
+  "name": "@ia-coder/desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "IA_Coder empacotado em Electron — abre backend e frontend com um duplo clique.",
+  "main": "main.cjs",
+  "author": "Émerson Schulze",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "postinstall": "electron-builder install-app-deps",
+    "dist": "electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.emersonschulze.iacoder",
+    "productName": "IA_Coder",
+    "copyright": "Copyright © 2026 Émerson Schulze",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": ["main.cjs", "splash.html", "package.json"],
+    "extraResources": [
+      {
+        "from": "../server",
+        "to": "apps/server",
+        "filter": ["**/*", "!**/*.map", "!src/**/*.test.*"]
+      },
+      {
+        "from": "../web/dist",
+        "to": "apps/web/dist"
+      },
+      {
+        "from": "../../docker-compose.yml",
+        "to": "docker-compose.yml"
+      },
+      {
+        "from": "../../docker",
+        "to": "docker"
+      },
+      {
+        "from": "../../db",
+        "to": "db"
+      },
+      {
+        "from": "../../.env.example",
+        "to": ".env.example"
+      }
+    ],
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "artifactName": "IA_Coder-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "IA_Coder"
+    }
+  }
+}

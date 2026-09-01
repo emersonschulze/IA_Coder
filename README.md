@@ -10,7 +10,7 @@ de verdade, com os agentes trabalhando em paralelo na tela.
 
 ## Demo
 
-![Demo do IA_Coder: pedindo uma tela de login no Talking, o plano sendo confirmado e os quatro agentes executando em paralelo](docs/demo.gif)
+![Demo do IA_Coder: pedido descontraído no Talking, quatro agentes executando em paralelo com até quatro skills acesas ao mesmo tempo, e a Tree com vinte assuntos já conectados](docs/demo.gif)
 
 *(gravado com o roteiro de ensaio — `npm run mock` em `apps/web`, sem gastar token nenhum; veja [“Ver a tela viva sem gastar nada”](#rodando).)*
 
@@ -29,10 +29,13 @@ IA_Coder/
 │   │       ├── mcp.ts          # servidores MCP: quem está de pé, quem precisa de login
 │   │       ├── usage.ts        # consumo real da conta (janela de 5h + limite semanal)
 │   │       └── protocol.ts     # tipos dos eventos WebSocket (fonte da verdade)
-│   └── web/                # frontend (React + TypeScript + Vite + CSS Modules)
-│       ├── src/components/     # painéis: Talking, Agents, Skills, Tree, Status, Working…
-│       ├── src/store/          # Zustand — um único useSession alimentado pelo servidor
-│       └── tools/mock-server.mjs # servidor de ensaio, mesmo protocolo, roteiro fixo
+│   ├── web/                 # frontend (React + TypeScript + Vite + CSS Modules)
+│   │   ├── src/components/     # painéis: Talking, Agents, Skills, Tree, Status, Settings…
+│   │   ├── src/store/          # Zustand — um único useSession alimentado pelo servidor
+│   │   └── tools/mock-server.mjs # servidor de ensaio, mesmo protocolo, roteiro fixo
+│   └── desktop/             # empacota tudo num instalador Windows (Electron)
+│       ├── main.cjs            # sobe o servidor, espera a porta, abre a janela
+│       └── package.json        # config do electron-builder (gera o .exe)
 ├── db/init/                # esquema do Postgres, aplicado no primeiro boot
 ├── db/migrations/          # alterações para bancos que já existem
 ├── docs/
@@ -40,8 +43,9 @@ IA_Coder/
 │   ├── PROTOCOLO.md        # contrato de eventos WebSocket entre web e server
 │   ├── DOCKER.md           # infraestrutura local e por que ela é assim
 │   └── demo.gif            # a demonstração acima
-├── scripts/infra.ps1       # atalhos do compose no Windows (PowerShell)
-├── scripts/infra.sh        # os mesmos atalhos no WSL, + reset-db
+├── scripts/infra.ps1           # atalhos do compose no Windows (PowerShell)
+├── scripts/infra.sh            # os mesmos atalhos no WSL, + reset-db
+├── scripts/build-installer.ps1 # gera o instalador Windows (apps/desktop/release/*.exe)
 ├── workspace/artifacts/    # artefatos gerados pelos agentes (painel Archives)
 ├── docker-compose.yml
 ├── LICENSE
@@ -91,6 +95,11 @@ IA_Coder/
    > `acceptEdits`, o popup avisa em vez de deixar você tentando logar num
    > servidor onde já está dentro.
 
+9. **Banco, Redis e voz se configuram sem editar arquivo.** O botão **⚙** na
+   barra de cima abre a tela de Configurações: endereço/senha do Postgres e do
+   Redis (aplicados na hora, sem reiniciar nada) e a escolha da voz do Piper
+   (baixada sozinha no primeiro uso).
+
 Todo o contrato de eventos entre a interface e o servidor está documentado em
 [docs/PROTOCOLO.md](docs/PROTOCOLO.md); o frontend **não inventa dado nenhum** — tudo que
 aparece na tela chegou por um evento do servidor.
@@ -109,7 +118,25 @@ repositórios. Não sobe Adminer: quem quiser olhar o banco aponta um cliente pr
 
 ## Rodando
 
-Três terminais:
+### Opção 1 — instalador (recomendado)
+
+Um instalador Windows (`.exe`) que sobe o servidor e abre a janela sozinho — sem
+terminal, sem `localhost` no navegador. O Docker continua sendo pré-requisito
+(Postgres/Redis/voz vêm de lá); o instalador checa se ele está rodando e já sobe
+os containers, ou avisa e deixa abrir mesmo assim, em modo degradado.
+
+Gerar o instalador (feito uma vez, na sua máquina ou em CI):
+
+```powershell
+.\scripts\build-installer.ps1
+```
+
+Isso deixa `IA_Coder-Setup-<versão>.exe` em `apps\desktop\release\`. Rode o instalador,
+escolha a pasta (não precisa ser Administrador) e abra o **IA_Coder** pelo atalho criado
+no Menu Iniciar/Desktop. Detalhes de como ele funciona por dentro:
+[docs/ESTADO.md](docs/ESTADO.md#decisões-que-não-são-óbvias-não-refaça-sem-ler).
+
+### Opção 2 — três terminais (desenvolvimento)
 
 ```powershell
 # 1) infraestrutura
@@ -162,7 +189,9 @@ npm run dev        # em outro terminal, a interface de verdade
 
 | Tema | Escolha |
 |---|---|
-| Runtime | Web app + servidor Node local (empacotável em Electron depois) |
+| Runtime | Web app + servidor Node local, empacotados num instalador Electron (`apps/desktop`) |
+| Instalador | Electron + electron-builder (NSIS), roda o servidor com o Node embutido no próprio Electron — sem exigir Node.js à parte. Docker continua fora do instalador (é infraestrutura, não app) |
+| Configuração | Banco/Redis/voz editáveis em runtime (`workspace/settings.json`, tela **⚙**), sem reiniciar o servidor |
 | Estado | Zustand — um único `useSession` alimentado por eventos do servidor |
 | Transporte | WebSocket com reconexão exponencial e fila de comandos |
 | Estilo | CSS Modules + design tokens (`src/styles/tokens.css`) |

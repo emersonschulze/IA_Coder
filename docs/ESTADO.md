@@ -363,6 +363,47 @@ propósito: isso é lido em voz alta.
 O aviso de silêncio também varia, mas nunca ameniza: quando ele está calado há
 tempo demais, as três versões dizem há quanto tempo e lembram do abortar.
 
+**Configurações (banco, Redis, voz) ficam em `workspace/settings.json`, não no
+`.env`.** O `.env` continua sendo o que o `docker compose` lê para subir os
+containers; `settings.json` é o que a tela de Configurações escreve, e
+`apps/server/src/settings.ts` o funde por cima dos valores derivados do `.env`
+(`config.ts` → `databaseParts`/`redisParts`/`voiceParts`). Dois arquivos porque
+são dois públicos diferentes: o `.env` é editado à mão antes de subir o Docker;
+o `settings.json` é editado pela tela, com o servidor já rodando.
+
+**Trocar de banco não reinicia nada.** `settings.save` com `database` chama
+`closeDb()` seguido de `initDb()` — o pool antigo fecha, um novo abre com a URL
+nova, e o servidor manda `settings.state` com `dbApplied: true/false` conforme a
+conexão pegou. Sem isso, cada ajuste na tela pediria para fechar os dois
+terminais e abrir de novo.
+
+**Voz não guarda nada em cache de módulo.** Antes `voice.ts` lia
+`WHISPER_URL`/`PIPER_URL`/`PIPER_VOICE`/`VOICE_WAKE_WORD` uma vez, na
+inicialização — trocar a voz pela tela não tinha efeito até reiniciar o
+servidor. Agora toda função (`checkVoice`, `transcribe`, `synthesize`,
+`wakeWord`, `matchesWake`) lê `getSettings().voice` na hora da chamada: o
+efeito é imediato, inclusive numa fala já em andamento.
+
+**O Piper carrega vozes sob demanda, uma vez cada.** `docker/piper/server.py`
+mantém um `dict[str, PiperVoice]` em memória; a primeira síntese com uma voz
+nova baixa o modelo do Hugging Face (`rhasspy/piper-voices`, ~60 MB) e cacheia
+— trocas seguintes para a mesma voz são instantâneas. `GET /voices` devolve o
+catálogo com `installed: true/false` para a tela pintar o que já foi baixado.
+
+**O instalador Electron não embute o Docker.** Decisão consciente: Postgres,
+Redis e (opcionalmente) Whisper/Piper continuam vindo do
+`docker compose`. O instalador checa se o Docker está rodando e, se estiver,
+já sobe os containers sozinho (`docker compose up -d`); se não estiver, avisa e
+deixa abrir mesmo assim — o Tree funciona em modo degradado
+(`banco offline`, reconectando a cada 10s) até o Docker subir. Tirar essa
+dependência é uma ideia separada, ainda não decidida (ver "Ideias na mesa").
+
+**O instalador roda o servidor com o Node embutido no Electron, não com um
+Node.js instalado à parte.** `apps/desktop/main.cjs` sobe
+`apps/server/src/index.ts` via `tsx`, chamando o próprio executável do Electron
+com a variável `ELECTRON_RUN_AS_NODE=1` — é assim que o Electron vira "só o
+Node" para um processo filho. Menos uma coisa para pedir para instalar.
+
 ---
 
 ## Pendências conhecidas
@@ -406,6 +447,10 @@ tempo demais, as três versões dizem há quanto tempo e lembram do abortar.
   decidir como detectar (nomes de ferramenta vindo como `mcp__servidor__...`
   no `catalog.ts`?) e como descobrir quais MCPs estão configurados na sua
   máquina para nomear cada um direito.
+- **Tirar a dependência do Docker.** Hoje Postgres/Redis/Whisper/Piper vêm do
+  `docker compose`; o instalador só checa e avisa. Ideia para depois: Postgres
+  embutido (algo como `pg-embedded` ou um binário portátil) e Redis trocado
+  por algo em processo, para o IA_Coder rodar sem exigir Docker Desktop.
 
 ---
 
@@ -422,8 +467,9 @@ apps/server/src/
   knowledge.ts    Tree: gravar assunto, ler os dois níveis, recuperar contexto
   auth.ts         estado da credencial e login
   usage.ts        consumo real da conta (5h + semana), via API não-oficial
-  voice.ts        clientes do Whisper e do Piper
+  voice.ts        clientes do Whisper e do Piper (voz e wake word live-reload)
   db.ts           Postgres opcional, com reconexão e checagem de esquema
+  settings.ts     workspace/settings.json — banco/Redis/voz, editável em runtime
 
 apps/web/src/
   components/ConversationPanel.tsx   Talking: chat, imagem anexada, quem fala
@@ -431,8 +477,13 @@ apps/web/src/
   components/TreePanel.tsx           os dois níveis do Tree
   components/Panel.tsx               casca dos painéis + a lupa + as abas
   components/StatusArchivesPanel.tsx Archives/Status num painel só, alternando
+  components/SettingsPanel.tsx       tela de banco, Redis e voz
   store/useSession.ts                todo o estado, alimentado por eventos
   types/protocol.ts                  contrato — espelha apps/server/src/protocol.ts
+
+apps/desktop/
+  main.cjs        Electron: sobe o servidor (Node embutido), espera a porta,
+                  abre a janela com apps/web/dist — o instalador Windows (.exe)
 ```
 
 Contrato completo de eventos: [PROTOCOLO.md](PROTOCOLO.md).

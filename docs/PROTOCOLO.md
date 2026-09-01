@@ -36,6 +36,9 @@ Todo evento tem um campo `type`. Fonte da verdade dos tipos: `apps/web/src/types
 | `mcp.check` | `{}` | revarre os servidores MCP (`claude mcp list`) |
 | `mcp.login` | `{ server, mode?: 'shell' \| 'window' }` | roda `claude mcp login "<server>"`. `shell` (padrão) usa o PowerShell que já está aberto e transmite a saída; `window` abre um terminal visível |
 | `mcp.dismiss` | `{}` | você fechou o aviso de servidor bloqueado; limpa `blocked` |
+| `settings.get` | `{}` | pede o estado atual de banco/Redis/voz (tela de Configurações) |
+| `settings.save` | `{ patch: SettingsPatch }` | grava e aplica `database` / `redis` / `voice` sem reiniciar o servidor: mandar `database` reconecta o pool na hora (`closeDb` + `initDb`); mandar `voice` já vale na próxima fala/transcrição |
+| `voice.list` | `{}` | pede o catálogo de vozes do Piper (instaladas e disponíveis para baixar) |
 | `ping` | `{}` | keepalive; servidor responde `pong` |
 
 ## Servidor → Cliente (`ServerEvent`)
@@ -146,6 +149,24 @@ duas porque o conserto não é o mesmo:
 `blocked` conta que uma ferramenta acabou de ser barrada, com o motivo já
 classificado — é o que faz o popup abrir sozinho no momento em que resolve
 alguma coisa, em vez de a cada resposta.
+
+### Configurações (banco, Redis, voz)
+- `settings.state` — `{ settings: Settings, dbApplied?: boolean }` mandado assim
+  que a aba conecta e de novo depois de todo `settings.save`. `settings.database`
+  já vem com a senha mascarada — o servidor nunca devolve a senha em texto puro.
+  `dbApplied` só aparece na resposta de um `settings.save` que mexeu em `database`:
+  `true` quer dizer que o pool reconectou com a URL nova; `false`, que a conexão
+  falhou e o servidor voltou para a anterior.
+- `voice.options` — `{ voices: VoiceOption[] }` resposta de `voice.list`. Cada
+  item tem `id`, `label` e `installed` (já baixada no volume do Piper ou não —
+  a primeira síntese com uma voz nova baixa e fica em cache).
+
+Nada disso reinicia o servidor. Trocar o banco fecha e reabre o pool do
+Postgres na hora (`db.ts`: `closeDb()` + `initDb()`); trocar a voz ou a palavra
+de despertar só muda o que `voice.ts` lê na próxima chamada — nenhum dos dois
+mantém nada em cache de módulo. `workspace/settings.json` é o arquivo que
+guarda isso entre uma execução e outra; ele pisa nos valores do `.env`, nunca
+o contrário.
 
 Duas regras que valem mais que o resto:
 
