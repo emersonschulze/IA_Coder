@@ -1,5 +1,5 @@
 import pg from 'pg';
-import { config } from './config.js';
+import { databaseUrl, describeDatabase } from './settings.js';
 
 const { Pool } = pg;
 
@@ -29,17 +29,6 @@ let state: DbState = 'connecting';
 let retry: NodeJS.Timeout | null = null;
 let notify: ((state: DbState) => void) | null = null;
 
-/** Esconde a senha na hora de imprimir o endereço no log. */
-function mask(url: string): string {
-  try {
-    const parsed = new URL(url);
-    if (parsed.password) parsed.password = '***';
-    return parsed.toString();
-  } catch {
-    return url;
-  }
-}
-
 function setState(next: DbState): void {
   if (state === next) return;
   state = next;
@@ -47,7 +36,7 @@ function setState(next: DbState): void {
 }
 
 async function attempt(): Promise<DbState> {
-  const { url, source } = config.database;
+  const url = databaseUrl();
 
   if (!pool) {
     pool = new Pool({ connectionString: url, max: 4, connectionTimeoutMillis: 3000 });
@@ -66,20 +55,20 @@ async function attempt(): Promise<DbState> {
               to_regclass('public.subjects_project_slug_idx')::text AS scoped`,
     );
     if (!rows[0]?.exists) {
-      console.warn(`[db] conectado em ${mask(url)}, mas a tabela "subjects" não existe.`);
+      console.warn(`[db] conectado em ${describeDatabase()}, mas a tabela "subjects" não existe.`);
       console.warn('[db] O banco foi criado antes do Tree de dois níveis. Aplique a migração:');
       console.warn('[db]   docker exec -i ia_coder_postgres psql -U iacoder -d iacoder < db/migrations/001_tree_dois_niveis.sql');
       setState('schema-missing');
       return state;
     }
     if (!rows[0]?.scoped) {
-      console.warn(`[db] conectado em ${mask(url)}, mas o Tree ainda é global (sem escopo de projeto).`);
+      console.warn(`[db] conectado em ${describeDatabase()}, mas o Tree ainda é global (sem escopo de projeto).`);
       console.warn('[db] Aplique a migração:');
       console.warn('[db]   docker exec -i ia_coder_postgres psql -U iacoder -d iacoder < db/migrations/002_tree_por_projeto.sql');
       setState('schema-missing');
       return state;
     }
-    if (state !== 'ok') console.log(`[db] conectado em ${mask(url)} (via ${source})`);
+    if (state !== 'ok') console.log(`[db] conectado em ${describeDatabase()}`);
     setState('ok');
     return state;
   } catch (error) {
@@ -90,11 +79,11 @@ async function attempt(): Promise<DbState> {
 
     if (state !== next) {
       if (relay) {
-        console.warn(`[db] ${mask(url)} aceitou a conexão e derrubou (${code}).`);
+        console.warn(`[db] ${describeDatabase()} aceitou a conexão e derrubou (${code}).`);
         console.warn('[db] O container está de pé — quem quebrou foi o encaminhamento de porta da WSL.');
         console.warn('[db] Conserto: no PowerShell, `wsl --shutdown`; depois reabra a WSL e `docker compose up -d`.');
       } else {
-        console.warn(`[db] não respondeu em ${mask(url)} (via ${source}): ${message}`);
+        console.warn(`[db] não respondeu em ${describeDatabase()}: ${message}`);
         console.warn('[db] Tree desativado. Vou continuar tentando a cada 10s — não precisa reiniciar.');
       }
     }

@@ -12,6 +12,17 @@ Thumbs.db
 workspace/artifacts/*
 !workspace/artifacts/.gitkeep
 
+# Gravados pela tela de Configurações e pelo seletor de projeto — têm senha de
+# banco e caminho local da sua máquina. Nunca vão para o repositório.
+workspace/settings.json
+workspace/prefs.json
+
+# Saída do electron-builder (o .exe do instalador é grande e é build, não código).
+apps/desktop/release/
+
+# Rascunho do post de lançamento — é seu, não vai para o repositório.
+docs/linkedin-lancamento.md
+
 # Certificado do proxy corporativo: público, mas identifica a infraestrutura
 # de segurança da empresa — não vai para repositório público.
 certs/

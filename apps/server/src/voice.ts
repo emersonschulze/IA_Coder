@@ -1,7 +1,5 @@
 import { config } from './config.js';
-
-const WHISPER = process.env.WHISPER_URL ?? 'http://localhost:9000';
-const PIPER = process.env.PIPER_URL ?? 'http://localhost:5002';
+import { getSettings } from './settings.js';
 
 export interface VoiceHealth {
   stt: boolean;
@@ -21,6 +19,7 @@ export const voiceHealth = (): VoiceHealth => health;
  * só perde qualidade.
  */
 export async function checkVoice(): Promise<VoiceHealth> {
+  const { whisperUrl, piperUrl } = getSettings().voice;
   const ping = async (url: string): Promise<boolean> => {
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(2500) });
@@ -31,8 +30,8 @@ export async function checkVoice(): Promise<VoiceHealth> {
   };
 
   const [stt, tts] = await Promise.all([
-    ping(`${WHISPER}/docs`),
-    ping(`${PIPER}/health`),
+    ping(`${whisperUrl}/docs`),
+    ping(`${piperUrl}/health`),
   ]);
 
   const changed = stt !== health.stt || tts !== health.tts;
@@ -48,7 +47,7 @@ export async function transcribe(audio: Buffer, filename = 'fala.webm'): Promise
   const form = new FormData();
   form.append('audio_file', new Blob([new Uint8Array(audio)]), filename);
 
-  const url = `${WHISPER}/asr?encode=true&task=transcribe&language=pt&output=json`;
+  const url = `${getSettings().voice.whisperUrl}/asr?encode=true&task=transcribe&language=pt&output=json`;
   const response = await fetch(url, {
     method: 'POST',
     body: form,
@@ -60,20 +59,41 @@ export async function transcribe(audio: Buffer, filename = 'fala.webm'): Promise
   return (data.text ?? '').trim();
 }
 
-/** Texto → WAV, em pt-BR, pelo Piper local. */
+/**
+ * Lista as vozes do Piper que dá para escolher (baixada ou não).
+ *
+ * Vem do próprio container — ele conhece o catálogo e sabe o que já tem em
+ * disco. Sem Piper de pé, devolve lista vazia; a tela mostra o aviso de sempre.
+ */
+export async function listVoices(): Promise<{ id: string; label: string; installed: boolean }[]> {
+  const { piperUrl } = getSettings().voice;
+  const response = await fetch(`${piperUrl}/voices`, { signal: AbortSignal.timeout(4000) });
+  if (!response.ok) throw new Error(`Piper respondeu ${response.status}`);
+  return (await response.json()) as { id: string; label: string; installed: boolean }[];
+}
+
+/**
+ * Texto → WAV, em pt-BR, pelo Piper local.
+ *
+ * A voz vai no corpo do pedido: o container carrega modelos sob demanda e
+ * mantém em memória os que já usou, então trocar de voz na tela não pede
+ * reiniciar nada — o próximo áudio já sai na voz nova (baixando na hora, se
+ * for a primeira vez).
+ */
 export async function synthesize(text: string): Promise<Buffer> {
-  const response = await fetch(`${PIPER}/speak`, {
+  const { piperUrl, piperVoice } = getSettings().voice;
+  const response = await fetch(`${piperUrl}/speak`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, voice: piperVoice }),
     signal: AbortSignal.timeout(30_000),
   });
   if (!response.ok) throw new Error(`Piper respondeu ${response.status}`);
   return Buffer.from(await response.arrayBuffer());
 }
 
-/** Nome que acorda a ferramenta. Configurável porque é gosto pessoal. */
-export const wakeWord = (process.env.VOICE_WAKE_WORD ?? 'ia coder').toLowerCase();
+/** Nome que acorda a ferramenta. Configurável na tela de Configurações. */
+export const wakeWord = (): string => getSettings().voice.wakeWord.toLowerCase();
 
 /**
  * A transcrição raramente é exata: "IA Coder" vira "ia códer", "ia corder",
@@ -88,7 +108,7 @@ export function matchesWake(text: string): { hit: boolean; rest: string } {
     .replace(/\s+/g, ' ')
     .trim();
 
-  const wake = wakeWord
+  const wake = wakeWord()
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '')
     .replace(/[^a-z0-9\s]/g, ' ')
@@ -104,9 +124,7 @@ export function matchesWake(text: string): { hit: boolean; rest: string } {
   return { hit: false, rest: text };
 }
 
-export const voiceConfig = {
-  whisperUrl: WHISPER,
-  piperUrl: PIPER,
-  wakeWord,
+export const voiceConfig = (): { whisperUrl: string; piperUrl: string; wakeWord: string; claudeBin: string } => ({
+  ...getSettings().voice,
   claudeBin: config.claude.bin,
-};
+});

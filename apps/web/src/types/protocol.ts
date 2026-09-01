@@ -13,11 +13,14 @@ import type {
   Link,
   LogEntry,
   SessionInfo,
+  Settings,
+  SettingsPatch,
   Skill,
   SubjectDetail,
   SubjectGraph,
   TreeStatus,
   Usage,
+  VoiceOption,
   Workflow,
   WorkflowState,
 } from './domain';
@@ -72,6 +75,8 @@ export type ServerEvent =
   | { type: 'mcp.state'; mcp: McpState }
   | { type: 'mcp.login.line'; server: string; line: string }
   | { type: 'mcp.login.done'; server: string; ok: boolean; urls: string[] }
+  | { type: 'settings.state'; settings: Settings; dbApplied?: boolean; error?: string }
+  | { type: 'voice.options'; options: VoiceOption[]; error?: string }
   | { type: 'pong' }
   | { type: 'error'; message: string };
 
@@ -110,6 +115,9 @@ export type ClientCommand =
    * Aqui o título e o contexto são seus; nada é inferido.
    */
   | { type: 'knowledge.manual'; title: string; summary: string; tags?: string[] }
+  | { type: 'settings.get' }
+  | { type: 'settings.save'; patch: SettingsPatch }
+  | { type: 'voice.list' }
   | { type: 'ping' };
 
 export type ConnectionState = 'connecting' | 'open' | 'reconnecting' | 'closed';

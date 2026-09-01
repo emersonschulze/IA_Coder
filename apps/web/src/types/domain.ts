@@ -206,6 +206,38 @@ export interface McpState {
   blocked?: { server: string; tool: string; reason: 'needs-auth' | 'permission' } | null;
 }
 
+/**
+ * Onde o servidor busca cada peça de infraestrutura — a tela de
+ * Configurações edita isto. Não sobe container nenhum, só diz ao servidor
+ * onde bater (Postgres/Redis/Whisper/Piper continuam vindo do
+ * `docker compose`, ou de outra máquina, se for o caso).
+ */
+export interface DatabaseSettings {
+  host: string; port: number; user: string; password: string; name: string;
+}
+export interface RedisSettings {
+  host: string; port: number; password: string;
+}
+export interface VoiceSettings {
+  whisperUrl: string; piperUrl: string; piperVoice: string; wakeWord: string;
+}
+export interface Settings {
+  database: DatabaseSettings;
+  redis: RedisSettings;
+  voice: VoiceSettings;
+}
+export interface SettingsPatch {
+  database?: Partial<DatabaseSettings>;
+  redis?: Partial<RedisSettings>;
+  voice?: Partial<VoiceSettings>;
+}
+/** Uma voz do Piper que dá para escolher — baixada ou não ainda. */
+export interface VoiceOption {
+  id: string;
+  label: string;
+  installed: boolean;
+}
+
 /** Por que o Tree está do jeito que está. */
 export type TreeStatus =
   | 'ok'

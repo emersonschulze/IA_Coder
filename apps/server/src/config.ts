@@ -24,17 +24,38 @@ function resolveDatabaseUrl(): { url: string; source: 'DATABASE_URL' | 'docker-c
   const explicit = process.env.DATABASE_URL?.trim();
   if (explicit) return { url: explicit, source: 'DATABASE_URL' };
 
-  const user = process.env.POSTGRES_USER ?? 'iacoder';
-  const password = process.env.POSTGRES_PASSWORD ?? 'iacoder';
-  const database = process.env.POSTGRES_DB ?? 'iacoder';
-  const host = process.env.POSTGRES_HOST ?? 'localhost';
+  const { host, port, user, password, name } = databaseParts;
+  const credentials = `${encodeURIComponent(user)}:${encodeURIComponent(password)}`;
+  return { url: `postgresql://${credentials}@${host}:${port}/${name}`, source: 'docker-compose' };
+}
+
+/**
+ * As mesmas peças soltas — host/porta/usuário/senha/nome — que a tela de
+ * Configurações edita. Ficam expostas à parte porque `settings.ts` usa isto
+ * como valor padrão antes de existir um `workspace/settings.json`.
+ */
+export const databaseParts = {
+  host: process.env.POSTGRES_HOST ?? 'localhost',
   // 5433 no host é o padrão do nosso compose, para não brigar com um Postgres
   // já instalado no Windows.
-  const port = process.env.POSTGRES_PORT ?? '5433';
+  port: int(process.env.POSTGRES_PORT, 5433),
+  user: process.env.POSTGRES_USER ?? 'iacoder',
+  password: process.env.POSTGRES_PASSWORD ?? 'iacoder',
+  name: process.env.POSTGRES_DB ?? 'iacoder',
+};
 
-  const credentials = `${encodeURIComponent(user)}:${encodeURIComponent(password)}`;
-  return { url: `postgresql://${credentials}@${host}:${port}/${database}`, source: 'docker-compose' };
-}
+export const redisParts = {
+  host: process.env.REDIS_HOST ?? 'localhost',
+  port: int(process.env.REDIS_PORT, 6379),
+  password: process.env.REDIS_PASSWORD ?? '',
+};
+
+export const voiceParts = {
+  whisperUrl: process.env.WHISPER_URL ?? 'http://localhost:9000',
+  piperUrl: process.env.PIPER_URL ?? 'http://localhost:5002',
+  piperVoice: process.env.PIPER_VOICE ?? 'pt_BR-faber-medium',
+  wakeWord: process.env.VOICE_WAKE_WORD ?? 'ia coder',
+};
 
 const database = resolveDatabaseUrl();
 
@@ -57,6 +78,8 @@ export const config = {
 
   /** Onde as preferências ficam gravadas (caminho do projeto, recentes). */
   prefsFile: resolve(repoRoot, 'workspace', 'prefs.json'),
+  /** Onde a tela de Configurações grava banco/Redis/voz — sobrepõe o `.env`. */
+  settingsFile: resolve(repoRoot, 'workspace', 'settings.json'),
   artifactsDir: resolve(repoRoot, process.env.ARTIFACTS_DIR ?? 'workspace/artifacts'),
 
   /** Projeto usado enquanto o usuário não escolheu nenhum. */
