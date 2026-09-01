@@ -37,7 +37,7 @@ export function serverSlugOfTool(tool: string): string | null {
  * De qual servidor é esta ferramenta?
  *
  * A lista conhecida vem primeiro porque o nome do servidor pode conter o
- * próprio separador: "Junto  Seguros" (dois espaços) vira `Junto__Seguros`, e
+ * próprio separador: "Acme  Corp" (dois espaços) vira `Acme__Corp`, e
  * aí o corte pelo primeiro `__` inventa um servidor que não existe. Casando
  * contra quem realmente está configurado — do slug mais longo para o mais
  * curto, senão um prefixo comum rouba o outro — isso não acontece.
@@ -60,7 +60,7 @@ function statusOf(text: string): McpStatus {
  * Lê a saída do `claude mcp list`.
  *
  * O formato é uma linha por servidor, e ele é mais traiçoeiro do que parece:
- * o NOME pode conter " - " (`claude.ai Junto Seguros - Garantia`) e o ALVO pode
+ * o NOME pode conter " - " (`claude.ai Acme Corp - Produção`) e o ALVO pode
  * conter ":" (`node C:\...\index.mjs`). Então o corte é pelo PRIMEIRO ": " para
  * separar o nome, e pelo ÚLTIMO " - " do resto para separar o status.
  */

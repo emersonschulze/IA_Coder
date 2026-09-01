@@ -20,7 +20,7 @@ export interface CatalogEntry {
   /**
    * A PASTA onde isto mora em disco.
    *
-   * Existe por um motivo concreto: os agentes do JuntoAgents não invocam a
+   * Existe por um motivo concreto: alguns agentes de terceiros não invocam a
    * ferramenta `Skill` — o AGENT.md deles manda "antes de usar uma skill, leia
    * o arquivo correspondente" e lista `skills/planejar-e2e/SKILL.md`. Então,
    * nesta máquina, usar uma skill É ler esse arquivo. Sem saber onde cada uma

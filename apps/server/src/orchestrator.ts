@@ -419,9 +419,10 @@ export class Orchestrator {
      *
      * Dois caminhos, porque há dois jeitos de usar uma skill nesta máquina:
      * chamar a ferramenta `Skill`, e ABRIR o `SKILL.md` dela. O segundo não é
-     * gambiarra: é o que os AGENT.md do JuntoAgents mandam fazer ("antes de
-     * usar uma skill, leia o arquivo correspondente"). Enquanto só o primeiro
-     * contava, o painel jurava que nenhum agente usava skill nenhuma.
+     * gambiarra: é o que o `AGENT.md` de vários agentes de terceiros manda
+     * fazer ("antes de usar uma skill, leia o arquivo correspondente").
+     * Enquanto só o primeiro contava, o painel jurava que nenhum agente usava
+     * skill nenhuma.
      */
     const invoked = tool.name === 'Skill'
       ? this.installedSkills.get(bareName(String(tool.input.skill ?? tool.input.name ?? '')))
@@ -504,8 +505,8 @@ export class Orchestrator {
    * Ele está abrindo o `SKILL.md` de alguma skill instalada?
    *
    * É o sinal mais forte de skill em uso nesta máquina, porque é literalmente o
-   * que o AGENT.md do JuntoAgents manda o agente fazer: "antes de usar uma
-   * skill, leia o arquivo correspondente".
+   * que o `AGENT.md` de agentes de terceiros costuma mandar fazer: "antes de
+   * usar uma skill, leia o arquivo correspondente".
    *
    * Dois jeitos de ler, e os dois contam. Olhar só o `file_path` da ferramenta
    * `Read` deixava passar o caso mais comum na prática — `cat ".../SKILL.md"`

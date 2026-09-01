@@ -79,8 +79,8 @@ export function skillFromPath(path: string, dirs: Map<string, string>): string |
  * aconteceram na prática:
  *
  * 1. **A mesma skill mora em dois lugares.** A descoberta indexa o cache do
- *    plugin (`~/.claude/plugins/cache/junto-agents/…/skills/planejar-e2e`), mas
- *    o agente abre o repo-fonte (`C:/Repositorio/JuntoAgents/skills/planejar-e2e`)
+ *    plugin (`~/.claude/plugins/cache/acme-agents/…/skills/planejar-e2e`), mas
+ *    o agente abre o repo-fonte (`C:/Repositorio/AcmeAgents/skills/planejar-e2e`)
  *    — é a mesma skill em duas cópias, e comparar caminho absoluto nunca casa.
  * 2. **Nem toda leitura passa pela ferramenta `Read`.** O agente faz
  *    `cat ".../SKILL.md"` pelo Bash, e aí o que existe é uma linha de comando,
@@ -193,8 +193,8 @@ export function installedSkill(entry: CatalogEntry): Skill {
 /**
  * O nome que o Claude usa para chamar não é o nome do arquivo.
  *
- * Ele delega para `JuntoAgents:dev-system:AGENT` e invoca a skill como
- * `JuntoAgents:auditar-cnpj`. Ficamos com o pedaço que identifica de verdade,
+ * Ele delega para `AcmeAgents:dev-system:AGENT` e invoca a skill como
+ * `AcmeAgents:auditar-cnpj`. Ficamos com o pedaço que identifica de verdade,
  * para casar com o que achamos em disco.
  */
 export function bareName(reference: string): string {

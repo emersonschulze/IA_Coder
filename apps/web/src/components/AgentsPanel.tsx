@@ -33,8 +33,8 @@ export function AgentsPanel({ onInspect }: Props) {
   /*
    * A segunda linha do cartão troca de assunto conforme o agente trabalha.
    *
-   * Parado, ela diz de onde ele veio ("JUNTOAGENTS") — que é o que importa
-   * quando você está escolhendo. Trabalhando, ela diz a SKILL em curso, porque
+   * Parado, ela diz de onde ele veio (o plugin/fonte, ex. "PROJETO") — que é o
+   * que importa quando você está escolhendo. Trabalhando, ela diz a SKILL em curso, porque
    * aí a pergunta virou outra: não é mais "quem é este agente", é "o que ele
    * está fazendo agora". Um dev-qa tem sete skills e passa por várias numa
    * tarefa só; a origem dele não muda nunca e não responde nada.
