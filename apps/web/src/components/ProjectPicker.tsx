@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useDialogFocus } from '@/hooks/useDialogFocus';
 import { useSession } from '@/store/useSession';
 import styles from './ProjectPicker.module.css';
 
@@ -32,6 +33,8 @@ export function ProjectPicker({ onBrowse, onPickNative, onConfirm, onClose }: Pr
   const [silent, setSilent] = useState(false);
   const [slowPick, setSlowPick] = useState(false);
   const askedAt = useRef(0);
+  const pathInput = useRef<HTMLInputElement>(null);
+  const dialogRef = useDialogFocus<HTMLDivElement>(true, pathInput);
 
   /**
    * De quem é a culpa, de verdade.
@@ -77,14 +80,24 @@ export function ProjectPicker({ onBrowse, onPickNative, onConfirm, onClose }: Pr
     return () => window.clearTimeout(timer);
   }, [waiting]);
 
+  /*
+   * Só o Escape é global.
+   *
+   * O Enter ficava aqui também, e as linhas da listagem são `<button>`: o Enter
+   * que entrava numa pasta subia até `window` e confirmava JUNTO — com o
+   * `typed`, que o efeito acima acabara de sobrescrever com a pasta ATUAL. Dava
+   * `onBrowse(subpasta)` e `onConfirm(pasta pai)` de uma vez: o diálogo
+   * fechava, o servidor reabria o PowerShell e o Claude no diretório errado, e
+   * navegar a lista pelo teclado era impossível. Agora o Enter mora no campo de
+   * texto, que é de quem ele é.
+   */
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();
-      if (event.key === 'Enter' && typed.trim()) onConfirm(typed.trim());
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose, onConfirm, typed]);
+  }, [onClose]);
 
   const openExplorer = (): void => {
     askedAt.current = Date.now();
@@ -100,7 +113,14 @@ export function ProjectPicker({ onBrowse, onPickNative, onConfirm, onClose }: Pr
       className={styles.overlay}
       onClick={(event) => event.target === event.currentTarget && onClose()}
     >
-      <div className={styles.dialog} role="dialog" aria-label="Escolher pasta do projeto">
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        className={styles.dialog}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Escolher pasta do projeto"
+      >
         <header className={styles.head}>
           <h2>Pasta do projeto</h2>
           <button type="button" className={styles.close} onClick={onClose} aria-label="Fechar">
@@ -249,9 +269,15 @@ export function ProjectPicker({ onBrowse, onPickNative, onConfirm, onClose }: Pr
 
         <footer className={styles.foot}>
           <input
+            ref={pathInput}
             className={styles.pathInput}
             value={typed}
             onChange={(event) => setTyped(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter') return;
+              event.preventDefault();
+              if (typed.trim()) onConfirm(typed.trim());
+            }}
             placeholder="ou digite o caminho e aperte Enter"
             spellCheck={false}
           />

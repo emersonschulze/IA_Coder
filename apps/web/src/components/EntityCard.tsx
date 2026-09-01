@@ -12,6 +12,13 @@ interface EntityCardProps {
   color: string;
   initials?: string;
   active: boolean;
+  /**
+   * Este card pode puxar a rolagem do painel para si quando acender.
+   *
+   * Só UM por painel deve poder: dois cards ativos disputando a rolagem deixam
+   * o painel numa posição que não mostra nenhum dos dois.
+   */
+  scrollOnActive?: boolean;
   /** Texto completo no `title` — o card só mostra uma linha, com reticências. */
   hint?: string;
   /** 0..100 — barra fina no rodapé do card. */
@@ -32,6 +39,7 @@ export function EntityCard({
   color,
   initials,
   active,
+  scrollOnActive = true,
   hint,
   progress = 0,
   onHoverStart,
@@ -43,8 +51,8 @@ export function EntityCard({
   // Mesmo com a lista estável, o card que entrou em execução nunca fica fora
   // de vista — rola o mínimo necessário dentro do próprio painel.
   useEffect(() => {
-    if (active) node.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-  }, [active]);
+    if (active && scrollOnActive) node.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [active, scrollOnActive]);
 
   const className = [
     styles.card,

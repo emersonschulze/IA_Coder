@@ -11,6 +11,12 @@
 # O servidor do IA_Coder roda FORA do Docker, direto no Windows: ele precisa dar
 # spawn no PowerShell da sua máquina e enxergar seus repositórios. Container Linux
 # não faz isso. Veja docs/DOCKER.md.
+#
+# Toda porta é publicada em 127.0.0.1, nunca em 0.0.0.0. Sem o prefixo, o Docker
+# expõe o serviço para a rede inteira: num wifi de coworking ou de hotel,
+# qualquer máquina alcançava o Postgres (com a senha padrão) e o Redis (sem senha
+# nenhuma) e lia ou apagava o seu Tree. O servidor roda no seu Windows e continua
+# chegando por localhost.
 
 name: ia_coder
 
@@ -31,7 +37,7 @@ services:
       POSTGRES_INITDB_ARGS: '--encoding=UTF8'
       TZ: ${TZ:-America/Cuiaba}
     ports:
-      - '${POSTGRES_PORT:-5433}:5432'
+      - '127.0.0.1:${POSTGRES_PORT:-5433}:5432'
     volumes:
       - pgdata:/var/lib/postgresql/data
       # Rodam UMA vez, na criação do volume. Para reaplicar: docker compose down -v
@@ -63,7 +69,7 @@ services:
     restart: unless-stopped
     command: ['redis-server', '--appendonly', 'yes', '--maxmemory', '512mb', '--maxmemory-policy', 'noeviction']
     ports:
-      - '${REDIS_PORT:-6379}:6379'
+      - '127.0.0.1:${REDIS_PORT:-6379}:6379'
     volumes:
       - redisdata:/data
     healthcheck:
@@ -82,7 +88,7 @@ services:
     restart: unless-stopped
     profiles: ['ai']
     ports:
-      - '${OLLAMA_PORT:-11434}:11434'
+      - '127.0.0.1:${OLLAMA_PORT:-11434}:11434'
     volumes:
       - ollama:/root/.ollama
     healthcheck:
@@ -108,7 +114,7 @@ services:
       ASR_ENGINE: faster_whisper
       ASR_DEVICE: cpu
     ports:
-      - '${WHISPER_PORT:-9000}:9000'
+      - '127.0.0.1:${WHISPER_PORT:-9000}:9000'
     volumes:
       - whisper:/root/.cache
 
@@ -123,7 +129,7 @@ services:
     environment:
       PIPER_VOICE: ${PIPER_VOICE:-pt_BR-faber-medium}
     ports:
-      - '${PIPER_PORT:-5002}:5000'
+      - '127.0.0.1:${PIPER_PORT:-5002}:5000'
     volumes:
       - piper:/voices
     healthcheck:

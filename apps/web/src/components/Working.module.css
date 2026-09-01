@@ -92,6 +92,14 @@
 .blockDone {
   opacity: 0.66;
 }
+/*
+ * Interrompido nao e concluido. Fica apagado como o concluido, mas em ambar:
+ * o que esta ali dentro parou no meio e nao vale como entrega.
+ */
+.blockCancelled {
+  opacity: 0.55;
+  border-color: color-mix(in srgb, var(--am) 38%, transparent);
+}
 .sweep {
   position: absolute;
   inset: 0;
@@ -152,6 +160,26 @@
   text-transform: uppercase;
   color: var(--txt-dim);
 }
+/* O silêncio ficou longo demais: a cor muda porque a informação mudou de
+   "está demorando" para "pode ter travado". */
+.blockStalled {
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, var(--am) 55%, transparent);
+  border-radius: 999px;
+  letter-spacing: 0.06em;
+  color: var(--am);
+  animation: beat 1.6s infinite;
+}
+
+/* O relógio do bloco em execução: é o que separa "demorado" de "travado". */
+.blockElapsed {
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  letter-spacing: 0.06em;
+  color: var(--c);
+  opacity: 0.85;
+}
 .stateLed {
   width: 6px;
   height: 6px;
@@ -169,6 +197,11 @@
 .blockDone .stateLed {
   background: var(--gr);
   box-shadow: 0 0 8px var(--gr);
+}
+.blockCancelled .stateLed {
+  background: var(--am);
+  box-shadow: 0 0 8px var(--am);
+  animation: none;
 }
 @keyframes beat {
   50% {

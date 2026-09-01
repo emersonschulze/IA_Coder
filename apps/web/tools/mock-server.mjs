@@ -68,7 +68,7 @@ wss.on('connection', (socket) => {
     weekPct: 34, weekResetsAt: Date.now() + 4 * 24 * 60 * 60_000,
   }});
 
-  const publishConversation = () => send({ type: 'conversation.state', state: { active: false, thinking: false, pending } });
+  const publishConversation = () => send({ type: 'conversation.state', state: { active: false, thinking: false, executing: false, pending } });
   const agentSays = (text) => {
     send({ type: 'conversation.turn', role: 'agent', text });
     send({ type: 'conversation.say', text });
@@ -79,6 +79,20 @@ wss.on('connection', (socket) => {
   send({ type: 'skills.sync', skills: SKILLS });
   send({ type: 'tree.subjects', graph: { nodes: [], edges: [] }, status: 'unreachable' });
   send({ type: 'archives.sync', archives: [] });
+  // Um retrato plausivel do MCP: o chip da barra e o popup precisam de dados
+  // para o ensaio nao mostrar "0/0" como se nada estivesse configurado.
+  send({ type: 'mcp.state', mcp: {
+    servers: [
+      { name: 'atlassian', slug: 'atlassian', target: 'https://mcp.atlassian.com/v1/mcp (HTTP)', status: 'connected', label: 'Connected' },
+      { name: 'mentor-board', slug: 'mentor-board', target: 'node mcp-board/index.mjs', status: 'connected', label: 'Connected' },
+      { name: 'claude.ai Figma', slug: 'claude_ai_Figma', target: 'https://mcp.figma.com/mcp', status: 'needs-auth', label: 'Needs authentication' },
+    ],
+    checkedAt: Date.now(),
+    checking: false,
+    reachable: true,
+    permissionMode: 'auto',
+    blocked: null,
+  }});
   publishConversation();
   usage();
 
@@ -174,8 +188,33 @@ wss.on('connection', (socket) => {
     if (command.type !== 'conversation.input') return;
 
     send({ type: 'conversation.turn', role: 'user', text: command.text, images: command.images });
-    send({ type: 'conversation.state', state: { active: false, thinking: true, pending } });
-    await sleep(1100);
+    send({ type: 'conversation.state', state: { active: false, thinking: true, executing: false, pending } });
+
+    // Pensar não é ficar parado. Antes de responder ele lê o projeto, e isso
+    // aparece no CENTRO como qualquer outro trabalho — só que marcado como
+    // investigação, porque nada é alterado.
+    const wfLeitura = `wf_${Date.now().toString(36)}`;
+    send({ type: 'workflow.started', workflow: {
+      id: wfLeitura, title: command.text, state: 'running', kind: 'investigation',
+      step: 0, totalSteps: 3, progress: 0, startedAt: Date.now(),
+    }});
+    send({ type: 'block.upsert', block: {
+      id: 'blk_leitura', agentId: 'claude', index: 0, action: '', skillId: null,
+      state: 'running', progress: 0, logs: [], artifacts: [],
+    }});
+    const leitura = ['Procurando **/*.csproj', 'Lendo src/Api/Program.cs', 'Buscando "Controller"'];
+    for (const [i, passo] of leitura.entries()) {
+      send({ type: 'block.patch', patch: {
+        id: 'blk_leitura', action: passo, skillId: 'read',
+        state: 'running', progress: Math.round(((i + 1) / leitura.length) * 90),
+      }});
+      send({ type: 'block.log', blockId: 'blk_leitura', entry: { ts: Date.now(), level: 'info', text: passo } });
+      send({ type: 'skill.state', skillId: 'read', inUse: true });
+      await sleep(600);
+    }
+    send({ type: 'skill.state', skillId: 'read', inUse: false });
+    send({ type: 'block.patch', patch: { id: 'blk_leitura', state: 'done', progress: 100 } });
+    send({ type: 'workflow.finished', id: wfLeitura, state: 'done' });
 
     pending = {
       title: command.text,

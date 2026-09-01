@@ -17,13 +17,18 @@ const DURATION: Record<TabId, number> = {
   status: 20_000,
 };
 
+interface Props {
+  /** Abre o arquivo gerado com o programa padrão do Windows (comando `artifact.open`). */
+  onOpenArtifact: (path: string, reveal?: boolean) => void;
+}
+
 /**
  * Archives e Status fundidos num painel só, alternando sozinhos — libera a
  * altura que o Status ocupava na coluna para o painel de Conversa crescer.
  * Um clique na aba troca na hora e reinicia a contagem a partir dali; solto,
  * ele sempre volta a alternar.
  */
-export function StatusArchivesPanel() {
+export function StatusArchivesPanel({ onOpenArtifact }: Props) {
   const archivesCount = useSession((state) => state.archives.length);
   const windowPct = useSession((state) => state.usage.windowPct);
   const [active, setActive] = useState<TabId>('archives');
@@ -50,7 +55,7 @@ export function StatusArchivesPanel() {
       zoomable
       style={{ flex: '0 0 auto', maxHeight: 206 }}
     >
-      {active === 'archives' ? <ArchivesBody /> : <StatusBody />}
+      {active === 'archives' ? <ArchivesBody onOpenArtifact={onOpenArtifact} /> : <StatusBody />}
     </Panel>
   );
 }

@@ -1,16 +1,31 @@
 import { randomUUID } from 'node:crypto';
-import type { ClaudeSession, RateLimit, ToolUse, TurnResult } from './claude.js';
+import type { ClaudeSession, RateLimit, ToolResult, ToolUse, TurnResult } from './claude.js';
 import {
   MAIN_AGENT, SKILLS, artifactFromTool, bareName, describeTool, installedAgent, installedSkill,
-  skillForTool, subAgent, truncate,
+  folderOf, isDelegation, normalizeDir, skillCardForTool, skillForTool, skillFromPath,
+  skillFromText, subAgent, truncate,
 } from './catalog.js';
 import type { DiscoveredCatalog } from './discovery.js';
 import type {
-  Agent, Artifact, Block, LogEntry, ServerEvent, Skill, Usage, Workflow,
+  Agent, Artifact, Block, Link, LogEntry, ServerEvent, Skill, Usage, Workflow,
 } from './protocol.js';
 import type { AccountUsage } from './usage.js';
 
 type Emit = (event: ServerEvent) => void;
+
+/**
+ * Teto de linhas de log guardadas por bloco.
+ *
+ * Os blocos só são zerados em `openWorkflow()`, e o `block.upsert` reenvia o
+ * bloco inteiro — com o array de logs — a cada reconexão ou aba nova. Sem teto,
+ * uma execução longa acumulava milhares de linhas e a aba engasgava
+ * renderizando todas de uma vez. Mesmo valor do `LOG_LIMIT` do cliente, para os
+ * dois lados cortarem no mesmo ponto.
+ */
+const LOG_LIMIT = 200;
+
+/** O quanto de um turno chega à tela. Ver `Orchestrator.mode`. */
+export type OrchestratorMode = 'full' | 'investigation' | 'silent';
 
 /** Ganchos para quem quiser narrar a execução em voz alta. */
 export interface OrchestratorHooks {
@@ -29,25 +44,128 @@ export class Orchestrator {
   private agents: Agent[] = [{ ...MAIN_AGENT }];
   private skills: Skill[] = SKILLS.map((skill) => ({ ...skill }));
   private blocks = new Map<string, Block>();
-  private activeLinks: string[] = [];
+  /**
+   * As setas acesas AGORA, com o objeto inteiro — não só o id.
+   *
+   * O servidor é o dono das setas (docs/PROTOCOLO.md), então ele tem de saber
+   * redesenhá-las: quem chega no meio de uma execução (aba nova, F5, socket que
+   * reconectou) recebe os blocos de volta e ficava sem ligação nenhuma até a
+   * próxima ferramenta — minutos de tela em branco se um agente estivesse
+   * dentro de um `dotnet build`. Guardando só o id não dava nem para tentar.
+   */
+  private activeLinks = new Map<string, Link>();
   private artifacts: Artifact[] = [];
+  /**
+   * Artefatos que uma ferramenta PEDIU mas que ainda não se sabe se deram certo,
+   * indexados pelo id do `tool_use`.
+   *
+   * Um `Edit` que volta com "String to replace not found" não escreveu nada em
+   * disco; contabilizá-lo no uso da ferramenta punha no Archives um arquivo que
+   * nunca mudou. Só vira artefato quando o `tool_result` volta sem erro.
+   */
+  private pendingArtifacts = new Map<string, { blockId: string; artifact: Artifact }>();
   private workflow: Workflow | null = null;
   private toolCount = 0;
   private usage: Usage = {
     tokensUsed: 0, tokensLimit: 0, contextPct: 0, costUsd: 0, plan: 'Claude Code',
     updatedAt: Date.now(),
   };
-  /** Turnos internos (extrair assunto para o Tree) não devem virar bloco na tela. */
-  muted = false;
+  /**
+   * Quanto do trabalho vai para a tela.
+   *
+   * - "full": execução de verdade, depois do seu "pode ir". Tudo aparece.
+   * - "investigation": turno de conversa. O agente lê o projeto para conseguir
+   *   responder, e isso É trabalho: vira bloco, seta e skill acesa no centro.
+   *   Só o TEXTO fica de fora, porque nesse turno ele é um envelope JSON.
+   * - "silent": turno interno (extrair o assunto para o Tree). Nada aparece.
+   */
+  mode: OrchestratorMode = 'full';
+  /** Título do turno de conversa, usado se ele decidir investigar. */
+  private investigationTitle: string | null = null;
 
   /** Nome chamado pelo Claude → id do cartão na tela. */
   private installedAgents = new Map<string, string>();
   private installedSkills = new Map<string, string>();
+  /** Pasta em disco de cada skill → id dela. Veja `skillFromPath`. */
+  private skillDirs = new Map<string, string>();
+  /**
+   * NOME da pasta de cada skill → id dela. Veja `skillFromText`.
+   *
+   * O caminho absoluto não basta: a mesma skill existe em duas cópias — o cache
+   * do plugin, que a descoberta indexa, e o repo-fonte, que é de onde o agente
+   * costuma ler. O nome da pasta é o que as duas têm em comum.
+   */
+  private skillFolders = new Map<string, string>();
+
+  /**
+   * As delegações ABERTAS, indexadas pelo id do `Task` que as abriu.
+   *
+   * Precisa ser um mapa, não um slot: o Claude Code dispara vários `Task` na
+   * mesma leva ("fan out to the specialists in parallel") e os quatro correm ao
+   * mesmo tempo. Com um slot só, cada nova delegação apagava a anterior — e daí
+   * saíam os dois defeitos que se viam na tela:
+   *
+   * 1. o `tool_result` dos subagentes anteriores não casava mais com o slot, e
+   *    o bloco deles ficava "executando" para sempre, marcando "sem sinal há
+   *    14 minutos" enquanto o trabalho já tinha sido entregue;
+   * 2. tudo o que os quatro faziam era creditado ao último que delegou, então
+   *    os outros três ficavam com o bloco vazio e "sem skill no momento".
+   *
+   * Quem diz de quem é cada evento é o `parent_tool_use_id` do stream, não a
+   * ordem de chegada — em paralelo, ordem não significa nada.
+   */
+  private delegations = new Map<string, { agentId: string; blockId: string }>();
+
+  /**
+   * A skill que cada agente está usando AGORA. Por agente, não por delegação.
+   *
+   * Um agente não tem uma skill: o dev-qa tem sete, e ao longo de uma tarefa
+   * passa por várias — abre `planejar-e2e/SKILL.md` e gera os cenários, depois
+   * abre `criar-teste-e2e/SKILL.md` e implementa. O que a tela precisa mostrar é
+   * a corrente, trocando quando ele troca.
+   *
+   * Por AGENTE porque com quatro especialistas em paralelo são quatro skills
+   * correntes ao mesmo tempo, cada uma na linha do seu dono — e três coisas
+   * dependem disso de forma independente: o cartão do agente, o cartão do bloco
+   * e o brilho no painel Skill.
+   *
+   * Ela rege até ser trocada: enquanto o dev-qa lê dez arquivos de código para
+   * cumprir a `planejar-e2e`, a skill em curso continua sendo `planejar-e2e`.
+   * Cair para "Leitura" no primeiro arquivo seria trocar o QUE ele está fazendo
+   * pelo COMO.
+   */
+  private reigning = new Map<string, string>();
 
   /** Último texto que o agente escreveu — vira o resumo falado no fim. */
   private lastText = '';
+  /**
+   * Quando o agente deu sinal de vida pela última vez.
+   *
+   * "Está demorando" e "travou" são coisas diferentes, e sem esta marca a tela
+   * não consegue dizer qual das duas está acontecendo.
+   */
+  lastEventAt = 0;
   /** O que está sendo feito agora — texto técnico, para o log do bloco. */
   currentAction = '';
+  /**
+   * O agente chegou a fazer alguma coisa neste turno?
+   *
+   * Serve para a narração não dizer "terminado, sem sobressaltos" quando ele
+   * encerrou sem usar uma ferramenta sequer — que é falha, não sucesso.
+   */
+  get didWork(): boolean {
+    return this.toolCount > 0;
+  }
+  /**
+   * Existe uma execução de verdade em andamento?
+   *
+   * Um turno de conversa entrando no meio de uma execução sequestra o turno
+   * dela: o `ask` resolve no primeiro `result` — que é o da execução — e colhe
+   * como resposta o texto dela. Quem pergunta precisa saber disto antes.
+   */
+  get executing(): boolean {
+    return this.workflow?.kind === 'execution';
+  }
   /**
    * O GRUPO de ferramenta em uso (read, edit, shell…).
    *
@@ -101,7 +219,7 @@ export class Orchestrator {
     const keptAgent = new Map(this.agents.map((agent) => [agent.id, agent]));
     const keptSkill = new Map(this.skills.map((skill) => [skill.id, skill]));
 
-    const discovered = catalog.agents.map(installedAgent);
+    const discovered = catalog.agents.map((entry, index) => installedAgent(entry, index));
     const subagents = this.agents.filter((agent) => agent.id.startsWith('sub:'));
     this.agents = [
       keptAgent.get(MAIN_AGENT.id) ?? { ...MAIN_AGENT },
@@ -120,19 +238,39 @@ export class Orchestrator {
     this.installedSkills = new Map(this.skills
       .filter((skill) => skill.kind === 'skill')
       .map((skill) => [bareName(skill.name), skill.id]));
+    this.skillDirs = new Map(catalog.skills
+      .filter((entry) => entry.dir)
+      .map((entry) => [normalizeDir(entry.dir), entry.id]));
+    this.skillFolders = new Map(catalog.skills
+      .filter((entry) => entry.dir && folderOf(entry.dir))
+      .map((entry) => [folderOf(entry.dir), entry.id] as [string, string]));
 
     this.emit({ type: 'agents.sync', agents: this.agents });
     this.emit({ type: 'skills.sync', skills: this.skills });
   }
 
-  syncCatalog(): void {
-    this.emit({ type: 'agents.sync', agents: this.agents });
-    this.emit({ type: 'skills.sync', skills: this.skills });
-    this.emit({ type: 'archives.sync', archives: this.artifacts });
-    this.emit({ type: 'usage', usage: this.usage });
+  /**
+   * O retrato do estado atual, para quem acabou de chegar.
+   *
+   * @param to para onde mandar. O padrão é todo mundo, mas o handshake passa o
+   *   cliente recém-conectado — e faz diferença: com workflow aberto, o
+   *   `workflow.started` reenviado é tratado pelo cliente como execução NOVA e
+   *   zera blocos, setas, resultado e assuntos reaproveitados. Em broadcast,
+   *   abrir uma segunda aba (ou um socket que reconectou sozinho) apagava a
+   *   tela de quem já estava assistindo.
+   */
+  syncCatalog(to: Emit = this.emit): void {
+    to({ type: 'agents.sync', agents: this.agents });
+    to({ type: 'skills.sync', skills: this.skills });
+    to({ type: 'archives.sync', archives: this.artifacts });
+    to({ type: 'usage', usage: this.usage });
     if (this.workflow) {
-      this.emit({ type: 'workflow.started', workflow: this.workflow });
-      this.blocks.forEach((block) => this.emit({ type: 'block.upsert', block }));
+      this.lastEventAt = Date.now();
+      to({ type: 'workflow.started', workflow: this.workflow });
+      this.blocks.forEach((block) => to({ type: 'block.upsert', block }));
+      // As setas vivas voltam junto: o `workflow.started` acima zerou a lista do
+      // cliente, e sem isto ele veria blocos soltos, sem nenhuma ligação.
+      this.activeLinks.forEach((link) => to({ type: 'link.activated', link }));
     }
   }
 
@@ -144,10 +282,53 @@ export class Orchestrator {
    */
   startWorkflow(prompt: string, title = prompt): boolean {
     if (!this.claude.send(prompt)) return false;
+    /*
+     * Uma execução NUNCA é investigação, e não dá para confiar em quem chama
+     * para garantir isso.
+     *
+     * Em modo diferente de "full" o `onText` descarta o que o agente escreve —
+     * o resumo final some, `onFinish` recebe vazio e a narração encerra com
+     * "Terminado — sem sobressaltos" enquanto a resposta de verdade foi jogada
+     * fora. Quem dispara a execução é quem sabe que é execução; então é aqui
+     * que o modo se resolve.
+     */
+    this.mode = 'full';
+    this.investigationTitle = null;
+    this.openWorkflow(title, 'execution');
+    this.setAgentState('claude', 'working', 0);
+    this.blockFor('claude');
+    return true;
+  }
 
+  /**
+   * Um turno de conversa começou.
+   *
+   * O workflow NÃO nasce aqui: nasce na primeira ferramenta que ele usar. Quem
+   * só conversa não merece um workflow vazio piscando no centro; quem sai lendo
+   * o projeto merece ver isso acontecendo.
+   */
+  investigate(title: string): void {
+    this.mode = 'investigation';
+    this.investigationTitle = title;
+  }
+
+  /** Fim do turno de conversa: volta ao normal. */
+  resume(): void {
+    this.mode = 'full';
+    this.investigationTitle = null;
+  }
+
+  private openWorkflow(title: string, kind: 'execution' | 'investigation'): void {
     this.clearLinks();
     this.blocks.clear();
     this.toolCount = 0;
+    this.delegations.clear();
+    this.reigning.clear();
+    this.pendingArtifacts.clear();
+    // O resumo falado do turno anterior não pode sobreviver a este: uma execução
+    // que termina sem escrever texto nenhum herdava a última frase da execução
+    // PASSADA, e a voz anunciava um trabalho que não foi feito agora.
+    this.lastText = '';
     this.workflow = {
       id: `wf_${Date.now().toString(36)}`,
       title,
@@ -156,17 +337,24 @@ export class Orchestrator {
       totalSteps: 0,
       progress: 0,
       startedAt: Date.now(),
+      kind,
     };
     this.emit({ type: 'workflow.started', workflow: this.workflow });
-    this.setAgentState('claude', 'working', 0);
-    this.blockFor('claude');
-    return true;
   }
 
+  /**
+   * Abortar de verdade: derruba o agente e encerra o que estava na tela.
+   *
+   * Não depende de existir um workflow aberto. Um turno de conversa que ainda
+   * não usou ferramenta nenhuma não tem workflow — e era justamente o caso em
+   * que o abortar não fazia nada, deixando o agente trabalhando sozinho.
+   */
   cancel(): void {
-    if (!this.workflow) return;
-    this.claude.stop();
-    this.finish('cancelled', 'Execução abortada.');
+    // Encerrar ANTES de derrubar o processo: o `exit` do `stop()` também chama
+    // `finish`, e é este aqui que carrega o motivo certo. Com o workflow já
+    // fechado, aquele não tem mais o que fazer.
+    this.finish('cancelled');
+    this.claude.stop('você abortou a execução');
   }
 
   /* --------------------------------------------------------------- ligação -- */
@@ -174,14 +362,27 @@ export class Orchestrator {
   private wire(): void {
     this.claude.on('text', (text: string) => this.onText(text));
     this.claude.on('tool', (tool: ToolUse) => this.onTool(tool));
-    this.claude.on('tool_result', (result: { id: string; isError: boolean; text: string }) =>
-      this.onToolResult(result));
+    this.claude.on('tool_result', (result: ToolResult) => this.onToolResult(result));
     this.claude.on('result', (result: TurnResult) => this.onResult(result));
     this.claude.on('rate_limit', (limit: RateLimit) => this.onRateLimit(limit));
+    /*
+     * O processo morreu no meio do turno — e não só pelo botão de abortar:
+     * trocar de projeto, reiniciar o runtime e concluir um login de auth ou de
+     * MCP também derrubam o agente. Nesses caminhos o `result` do turno em
+     * andamento nunca chega, então nada encerrava o que estava na tela: bloco
+     * pulsando, skill acesa, setas animadas e "sem sinal há N minutos"
+     * crescendo, com o agente já morto. Interrompido, não concluído — daí
+     * 'cancelled', que é o estado que a tela usa para não apresentar trabalho
+     * pela metade como trabalho entregue.
+     */
+    this.claude.on('exit', () => {
+      if (this.workflow) this.finish('cancelled');
+    });
   }
 
   private onText(text: string): void {
-    if (this.muted) return;
+    this.lastEventAt = Date.now();
+    if (this.mode !== 'full') return;
     const blockId = this.blockFor('claude').id;
     const clean = text.replace(/\s+/g, ' ').trim();
     this.lastText = clean;
@@ -192,39 +393,101 @@ export class Orchestrator {
   }
 
   private onTool(tool: ToolUse): void {
-    if (this.muted) return;
-    const isDelegation = tool.name === 'Task';
-    const agentId = isDelegation
+    if (this.mode === 'silent') return;
+    this.lastEventAt = Date.now();
+    if (!this.workflow && this.mode === 'investigation') {
+      this.openWorkflow(this.investigationTitle ?? 'Investigando o projeto', 'investigation');
+      this.setAgentState('claude', 'working', 0);
+    }
+    const delegou = isDelegation(tool.name);
+    /*
+     * De quem é este evento?
+     *
+     * O `parent_tool_use_id` responde sem ambiguidade: veio de dentro de um
+     * `Task`, é do subagente daquele `Task`; veio sem pai, é do principal. Antes
+     * a resposta era "de quem delegou por último", que só acerta quando existe
+     * uma delegação de cada vez — e o Claude Code raramente delega assim.
+     */
+    const owner = tool.parentToolUseId ? this.delegations.get(tool.parentToolUseId) : undefined;
+    const agentId = delegou
       ? this.agentForDelegation(String(tool.input.subagent_type ?? 'agente'))
-      : 'claude';
+      : owner?.agentId ?? 'claude';
 
-    // A skill de verdade, quando ele invoca uma, é mais informativa do que o
-    // grupo de ferramentas — é ela que ganha a seta e o brilho.
+    /*
+     * A skill de verdade, quando existe uma, é mais informativa do que o grupo
+     * de ferramentas — é ela que ganha a seta e o brilho.
+     *
+     * Dois caminhos, porque há dois jeitos de usar uma skill nesta máquina:
+     * chamar a ferramenta `Skill`, e ABRIR o `SKILL.md` dela. O segundo não é
+     * gambiarra: é o que o `AGENT.md` de vários agentes de terceiros manda
+     * fazer ("antes de usar uma skill, leia o arquivo correspondente").
+     * Enquanto só o primeiro contava, o painel jurava que nenhum agente usava
+     * skill nenhuma.
+     */
     const invoked = tool.name === 'Skill'
       ? this.installedSkills.get(bareName(String(tool.input.skill ?? tool.input.name ?? '')))
-      : undefined;
-    const skillId = invoked ?? skillForTool(tool.name);
+      : this.skillBeingUsed(tool);
+    const skillId = invoked ?? skillCardForTool(tool.name);
     const block = this.blockFor(agentId);
     const action = describeTool(tool.name, tool.input);
 
     this.toolCount += 1;
-    this.setAgentState(agentId, 'working', this.guessProgress());
-    this.setSkillInUse(skillId);
+    // Descobriu uma skill nova? Ela passa a reger este agente daqui em diante,
+    // substituindo a anterior — é assim que a troca de skill aparece na tela.
+    if (invoked) this.reigning.set(agentId, invoked);
+    const emCurso = this.reigning.get(agentId) ?? skillId;
+    this.setAgentState(agentId, 'working', this.guessProgress(), emCurso);
+
+    if (delegou) {
+      // Delegar é ação de QUEM delega: a linha fica no bloco do principal, que
+      // passa a "blocked" — ele não está trabalhando, está esperando. O bloco do
+      // subagente abre com a tarefa que recebeu, não com o ato de delegá-la.
+      const principal = this.blockFor('claude');
+      this.log(principal.id, 'info', action);
+      this.setAgentState('claude', 'blocked', this.guessProgress());
+      this.delegations.set(tool.id, { agentId, blockId: block.id });
+      this.showWaiting();
+      this.patchBlock(block.id, {
+        action: truncate(String(tool.input.description ?? 'Assumindo a tarefa'), 70),
+        state: 'running',
+      });
+    }
+
+    /*
+     * Quem acende é a skill EM CURSO, não o grupo de ferramenta.
+     *
+     * PowerShell é ferramenta do sistema, não habilidade: se o dev-qa está
+     * executando a `planejar-e2e` e por acaso usa bash para isso, quem tem de
+     * aparecer é a skill. O grupo de ferramenta continua acendendo — mas só
+     * quando não há skill nenhuma regendo aquele agente, que é quando ele é, de
+     * fato, a melhor resposta para "o que está sendo feito".
+     */
+    this.setSkillsInUse(this.litSkills(emCurso));
     this.currentAction = action;
     this.currentSkill = skillForTool(tool.name);
-    this.patchBlock(block.id, { action, skillId, state: 'running', progress: this.guessProgress() });
-    this.log(block.id, 'info', action);
+    if (!delegou) {
+      this.patchBlock(block.id, {
+        action, skillId: emCurso, state: 'running', progress: this.guessProgress(),
+      });
+    }
+    // "Delegando para explore" é ação de quem delega, e já foi registrada no
+    // bloco do principal ali em cima. Repetir aqui punha o subagente delegando
+    // para si mesmo no próprio log — a primeira linha do cartão dele era um
+    // evento que ele não viveu.
+    if (!delegou) this.log(block.id, 'info', action);
     this.focusLinks(agentId, block.id, skillId, tool.name);
 
     const artifact = artifactFromTool(tool.name, tool.input);
     if (artifact) {
-      const entry: Artifact = {
-        id: randomUUID(), name: artifact.name, kind: artifact.kind,
-        href: artifact.path, createdAt: Date.now(),
-      };
-      this.artifacts = [entry, ...this.artifacts].slice(0, 100);
-      this.emit({ type: 'block.artifact', blockId: block.id, artifact: entry });
-      this.emit({ type: 'archive.added', archive: entry });
+      // Fica de molho até o resultado da ferramenta: aqui ele só PEDIU para
+      // escrever. Veja `pendingArtifacts`.
+      this.pendingArtifacts.set(tool.id, {
+        blockId: block.id,
+        artifact: {
+          id: randomUUID(), name: artifact.name, kind: artifact.kind,
+          href: artifact.path, createdAt: Date.now(),
+        },
+      });
     }
 
     if (this.workflow) {
@@ -238,12 +501,117 @@ export class Orchestrator {
     }
   }
 
-  private onToolResult(result: { id: string; isError: boolean; text: string }): void {
-    if (this.muted || !result.isError) return;
-    const block = this.blockFor('claude');
+  /**
+   * Ele está abrindo o `SKILL.md` de alguma skill instalada?
+   *
+   * É o sinal mais forte de skill em uso nesta máquina, porque é literalmente o
+   * que o `AGENT.md` de agentes de terceiros costuma mandar fazer: "antes de
+   * usar uma skill, leia o arquivo correspondente".
+   *
+   * Dois jeitos de ler, e os dois contam. Olhar só o `file_path` da ferramenta
+   * `Read` deixava passar o caso mais comum na prática — `cat ".../SKILL.md"`
+   * pelo Bash —, e aí o painel mostrava "Shell" no lugar da skill: a ferramenta
+   * do sistema roubando o crédito do trabalho.
+   */
+  private skillBeingUsed(tool: ToolUse): string | undefined {
+    if (this.skillFolders.size === 0) return undefined;
+
+    if (tool.name === 'Read' || tool.name === 'NotebookRead') {
+      const path = tool.input.file_path ?? tool.input.path ?? tool.input.notebook_path;
+      if (typeof path !== 'string' || !path) return undefined;
+      // Caminho exato primeiro: se ele está dentro de uma pasta que indexamos,
+      // não há ambiguidade. O nome da pasta é o plano B, para a outra cópia.
+      return skillFromPath(path, this.skillDirs)
+        ?? skillFromText(path, this.skillFolders)
+        ?? undefined;
+    }
+
+    if (tool.name === 'Bash' || tool.name === 'PowerShell') {
+      const command = tool.input.command;
+      if (typeof command !== 'string') return undefined;
+      return skillFromText(command, this.skillFolders) ?? undefined;
+    }
+
+    return undefined;
+  }
+
+  private onToolResult(result: ToolResult): void {
+    if (this.mode === 'silent') return;
+    this.lastEventAt = Date.now();
     const clean = truncate(result.text.replace(/\s+/g, ' ').trim(), 200);
+    this.settleArtifact(result);
+
+    // ESTA delegação terminou: o subagente entrega e o bloco dele fecha. Buscar
+    // pelo id do próprio `Task` é o que faz o fechamento funcionar com vários em
+    // paralelo — cada resultado encontra o seu, em qualquer ordem que chegue.
+    const encerrada = this.delegations.get(result.id);
+    if (encerrada) {
+      const { agentId, blockId } = encerrada;
+      this.delegations.delete(result.id);
+      this.log(blockId, result.isError ? 'error' : 'ok', clean || 'entregue');
+      this.patchBlock(blockId, { state: result.isError ? 'error' : 'done', progress: 100 });
+      this.setAgentState(agentId, result.isError ? 'error' : 'done', 100, null);
+      this.reigning.delete(agentId);
+      // Entregou: a skill dele APAGA agora, não na próxima ferramenta que
+      // alguém usar. Sem isto ela ficava acesa depois do agente ter ido embora,
+      // e o painel mostrava trabalho que não estava mais acontecendo.
+      this.setSkillsInUse(this.litSkills(null));
+      this.clearLinksOf(agentId);
+      // O principal só volta a trabalhar quando o ÚLTIMO subagente entrega:
+      // enquanto sobrar um, ele continua esperando, e é isso que "blocked" diz.
+      if (this.delegations.size === 0) {
+        this.setAgentState('claude', 'working', this.guessProgress());
+      }
+      this.showWaiting();
+      if (result.isError) this.hooks.onError?.(clean);
+      return;
+    }
+
+    if (!result.isError) return;
+    const owner = result.parentToolUseId ? this.delegations.get(result.parentToolUseId) : undefined;
+    const block = this.blockFor(owner?.agentId ?? 'claude');
     this.log(block.id, 'error', clean);
     this.hooks.onError?.(clean);
+  }
+
+  /**
+   * A escrita que a ferramenta pediu deu certo? Então vira artefato.
+   *
+   * Duas coisas acontecem aqui, e as duas existem porque o registro era feito no
+   * PEDIDO da ferramenta: (1) edição que falhou não entra mais, e (2) o mesmo
+   * arquivo tocado quatro vezes continua sendo uma linha só no Archives, com a
+   * data do último toque, em vez de quatro linhas idênticas.
+   *
+   * O artefato também é guardado no próprio bloco: o `block.upsert` reenvia o
+   * bloco inteiro a cada reconexão, e como só os logs viviam ali, quem dava F5
+   * perdia os chips de arquivo — e o cartão final do Talking, que soma os
+   * artefatos dos blocos, saía com ZERO arquivos enquanto o Archives listava
+   * todos.
+   */
+  private settleArtifact(result: ToolResult): void {
+    const pendente = this.pendingArtifacts.get(result.id);
+    if (!pendente) return;
+    this.pendingArtifacts.delete(result.id);
+    if (result.isError) return;
+
+    const { blockId, artifact } = pendente;
+    const mesmoCaminho = (item: Artifact): boolean =>
+      normalizeDir(item.href ?? '') === normalizeDir(artifact.href ?? '');
+    const anterior = this.artifacts.find(mesmoCaminho);
+    const entry: Artifact = anterior
+      ? { ...anterior, name: artifact.name, kind: artifact.kind, createdAt: artifact.createdAt }
+      : artifact;
+
+    this.artifacts = [entry, ...this.artifacts.filter((item) => !mesmoCaminho(item))].slice(0, 100);
+
+    const doBloco = this.blocks.get(blockId)?.artifacts;
+    if (doBloco) {
+      const jaEstava = doBloco.findIndex(mesmoCaminho);
+      if (jaEstava >= 0) doBloco.splice(jaEstava, 1);
+      doBloco.push(entry);
+    }
+    this.emit({ type: 'block.artifact', blockId, artifact: entry });
+    this.emit({ type: 'archive.added', archive: entry });
   }
 
   private onResult(result: TurnResult): void {
@@ -255,7 +623,10 @@ export class Orchestrator {
       updatedAt: Date.now(),
     };
     this.emit({ type: 'usage', usage: this.usage });
-    if (this.muted) return;
+    // Turno interno não mexe na tela; conversa que não investigou nada também
+    // não tem o que encerrar.
+    if (this.mode === 'silent') return;
+    if (this.mode === 'investigation' && !this.workflow) return;
     this.finish(result.isError ? 'failed' : 'done');
   }
 
@@ -271,6 +642,10 @@ export class Orchestrator {
   }
 
   private finish(state: 'done' | 'failed' | 'cancelled', summary?: string): void {
+    this.delegations.clear();
+    this.reigning.clear();
+    this.currentAction = '';
+    this.currentSkill = '';
     this.clearLinks();
     this.skills.forEach((skill) => {
       if (skill.inUse) {
@@ -279,15 +654,88 @@ export class Orchestrator {
       }
     });
     this.agents.forEach((agent) => this.setAgentState(agent.id, 'idle', 0, null));
+    // Concluído e interrompido são coisas diferentes, e o bloco tem de dizer
+    // qual foi: marcar tudo como "done" depois de um abortar apresentava
+    // trabalho pela metade como trabalho entregue.
+    const fecho: Block['state'] = state === 'cancelled' ? 'cancelled' : 'done';
     this.blocks.forEach((block) => {
-      if (block.state === 'running') this.patchBlock(block.id, { state: 'done', progress: 100 });
+      if (block.state === 'running') {
+        this.patchBlock(block.id, { state: fecho, progress: state === 'cancelled' ? block.progress : 100 });
+      }
     });
     if (!this.workflow) return;
-    this.workflow = { ...this.workflow, state, progress: 100 };
-    this.emit({ type: 'workflow.finished', id: this.workflow.id, state, summary });
+    /*
+     * O workflow encerrado SAI do ar aqui dentro.
+     *
+     * Ficava pendurado com estado "done", e o efeito era pior do que parece: o
+     * turno seguinte via `this.workflow` preenchido, não abria um novo — e
+     * `openWorkflow`, que é quem limpa os blocos, nunca rodava. Resultado: a
+     * tela continuava mostrando o workflow ANTERIOR, com o cabeçalho cravado em
+     * "✓ CONCLUÍDO" e os blocos velhos parados, enquanto o agente trabalhava
+     * sem aparecer em lugar nenhum. Daí a sensação de que a sessão tinha
+     * morrido e só voltava se você pedisse de novo.
+     *
+     * A tela guarda a própria cópia e continua mostrando o resultado; o que
+     * zeramos é a nossa, para o próximo turno nascer limpo.
+     */
+    const encerrado = { ...this.workflow, state, progress: 100 };
+    this.workflow = null;
+    const investigacao = encerrado.kind === 'investigation';
+    this.emit({ type: 'workflow.finished', id: encerrado.id, state, summary });
     this.currentAction = '';
     this.currentSkill = '';
-    this.hooks.onFinish?.(state, this.lastText);
+    // Quem lê o resumo em voz alta é a execução. A investigação já responde
+    // pelo Talking — narrar de novo seria o agente falando duas vezes.
+    if (!investigacao) this.hooks.onFinish?.(state, this.lastText);
+    /*
+     * Só agora, depois do `onFinish` — que legitimamente lê o `didWork` do turno
+     * que acabou de fechar.
+     *
+     * Sem zerar, `didWork` continuava true entre execuções e o abortar respondia
+     * "Parei o agente e o terminal no meio do caminho" com absolutamente nada em
+     * andamento — a frase existe justamente para distinguir os dois casos.
+     */
+    this.toolCount = 0;
+  }
+
+  /**
+   * Por quem o agente principal está esperando, agora.
+   *
+   * Dizer "Aguardando Dev Qa" quando há quatro rodando não é impreciso, é
+   * errado: some com três e faz parecer que o trabalho encolheu. Com um só,
+   * continua sendo o nome dele — que é a informação útil quando é um só.
+   */
+  private showWaiting(): void {
+    const abertas = [...this.delegations.values()];
+    if (abertas.length === 0) return;
+    const principal = this.blockFor('claude');
+    const nomes = abertas.map(
+      (item) => this.agents.find((agent) => agent.id === item.agentId)?.name ?? 'subagente',
+    );
+    const action = nomes.length === 1
+      ? `Aguardando ${nomes[0]}`
+      : `Aguardando ${nomes.length} especialistas: ${truncate(nomes.join(', '), 54)}`;
+    this.patchBlock(principal.id, { action, state: 'running' });
+  }
+
+  /**
+   * Quais cartões do painel Skill devem estar acesos neste instante.
+   *
+   * A skill corrente de CADA agente que ainda tem bloco aberto, mais o grupo de
+   * ferramenta da chamada de agora. Acender só a da última chamada era dizer
+   * que os outros três especialistas pararam de trabalhar — eles não pararam,
+   * só não foram os últimos a aparecer no stream.
+   */
+  private litSkills(current: string | null): string[] {
+    const ativos = new Set(
+      [...this.blocks.values()].filter((block) => block.state === 'running').map((block) => block.agentId),
+    );
+    const acesas = new Set<string>();
+    if (current) acesas.add(current);
+    this.reigning.forEach((skillId, agentId) => {
+      if (ativos.has(agentId)) acesas.add(skillId);
+    });
+    return [...acesas];
   }
 
   /* ------------------------------------------------------------ auxiliares -- */
@@ -326,7 +774,13 @@ export class Orchestrator {
   private log(blockId: string, level: LogEntry['level'], text: string): void {
     if (!text) return;
     const entry: LogEntry = { ts: Date.now(), level, text };
-    this.blocks.get(blockId)?.logs.push(entry);
+    const logs = this.blocks.get(blockId)?.logs;
+    if (logs) {
+      logs.push(entry);
+      // Descarta as mais antigas na hora do push: o array fica vivo na memória
+      // até o próximo openWorkflow() e vai inteiro em cada `block.upsert`.
+      if (logs.length > LOG_LIMIT) logs.splice(0, logs.length - LOG_LIMIT);
+    }
     this.emit({ type: 'block.log', blockId, entry });
   }
 
@@ -339,9 +793,16 @@ export class Orchestrator {
     this.emit({ type: 'agent.state', agentId: id, state, progress, skillId });
   }
 
-  private setSkillInUse(skillId: string): void {
+  /**
+   * Acende exatamente estas skills e apaga o resto.
+   *
+   * São várias porque coexistem: a skill que rege a delegação segue acesa
+   * enquanto o subagente lê arquivo, e a leitura acende junto.
+   */
+  private setSkillsInUse(ids: string[]): void {
+    const acesas = new Set(ids);
     this.skills.forEach((skill) => {
-      const next = skill.id === skillId;
+      const next = acesas.has(skill.id);
       if (skill.inUse !== next) {
         skill.inUse = next;
         this.emit({ type: 'skill.state', skillId: skill.id, inUse: next });
@@ -370,22 +831,56 @@ export class Orchestrator {
     return agent;
   }
 
-  /** Apaga as setas anteriores e acende as do momento. */
-  private focusLinks(agentId: string, blockId: string, skillId: string, tool: string): void {
-    this.clearLinks();
+  /**
+   * Acende as setas DESTE agente, sem apagar as dos outros.
+   *
+   * Com três agentes em paralelo, apagar tudo a cada ferramenta deixava só o
+   * último com seta — e a tela mentia sobre quem estava trabalhando. Os ids são
+   * fixos por agente, então reativar apenas atualiza a seta dele.
+   *
+   * A cor é a do agente, nas duas pontas: é assim que se distingue de quem é
+   * cada linha quando várias cruzam a tela ao mesmo tempo.
+   */
+  private focusLinks(agentId: string, blockId: string, skillId: string | null, tool: string): void {
+    const color = this.agents.find((agent) => agent.id === agentId)?.color;
     const toBlock = `lk_${agentId}_block`;
     const toSkill = `lk_${agentId}_skill`;
-    this.emit({ type: 'link.activated', link: {
-      id: toBlock, from: { kind: 'agent', id: agentId }, to: { kind: 'block', id: blockId }, label: 'executa',
-    }});
-    this.emit({ type: 'link.activated', link: {
-      id: toSkill, from: { kind: 'agent', id: agentId }, to: { kind: 'skill', id: skillId }, label: tool.toLowerCase(),
-    }});
-    this.activeLinks = [toBlock, toSkill];
+
+    const linkBlock: Link = {
+      id: toBlock, from: { kind: 'agent', id: agentId }, to: { kind: 'block', id: blockId },
+      label: 'executa', color,
+    };
+    this.emit({ type: 'link.activated', link: linkBlock });
+    this.activeLinks.set(toBlock, linkBlock);
+
+    // Delegar não acende cartão de skill nenhum — e a seta de skill que estava
+    // acesa antes precisa APAGAR, senão ela fica apontando para a última coisa
+    // que ele fez, como se ainda estivesse fazendo.
+    if (!skillId) {
+      this.emit({ type: 'link.deactivated', linkId: toSkill });
+      this.activeLinks.delete(toSkill);
+      return;
+    }
+
+    const linkSkill: Link = {
+      id: toSkill, from: { kind: 'agent', id: agentId }, to: { kind: 'skill', id: skillId },
+      label: tool.toLowerCase(), color,
+    };
+    this.emit({ type: 'link.activated', link: linkSkill });
+    this.activeLinks.set(toSkill, linkSkill);
   }
 
+  /** Apaga as setas de um agente só — quando ele termina a parte dele. */
+  private clearLinksOf(agentId: string): void {
+    [...this.activeLinks.keys()]
+      .filter((id) => id.startsWith(`lk_${agentId}_`))
+      .forEach((id) => {
+        this.emit({ type: 'link.deactivated', linkId: id });
+        this.activeLinks.delete(id);
+      });
+  }
   private clearLinks(): void {
-    this.activeLinks.forEach((id) => this.emit({ type: 'link.deactivated', linkId: id }));
-    this.activeLinks = [];
+    this.activeLinks.forEach((_link, id) => this.emit({ type: 'link.deactivated', linkId: id }));
+    this.activeLinks.clear();
   }
 }

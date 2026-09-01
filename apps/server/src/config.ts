@@ -42,6 +42,18 @@ export const config = {
   port: int(process.env.SERVER_PORT, 8787),
   database,
   host: process.env.SERVER_HOST ?? '127.0.0.1',
+  /**
+   * Origens extras que podem abrir o WebSocket, separadas por vírgula.
+   *
+   * O padrão já aceita qualquer endereço local (o Vite pode subir em 5174 se a
+   * 5173 estiver ocupada). Isto existe para quem serve a interface de outro
+   * lugar — e é a única forma de afrouxar a checagem, que sem ela deixaria
+   * qualquer site aberto no seu navegador pilotar o agente.
+   */
+  allowedOrigins: (process.env.SERVER_ALLOWED_ORIGINS ?? '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean),
 
   /** Onde as preferências ficam gravadas (caminho do projeto, recentes). */
   prefsFile: resolve(repoRoot, 'workspace', 'prefs.json'),
@@ -53,12 +65,22 @@ export const config = {
   claude: {
     bin: process.env.CLAUDE_BIN ?? 'claude',
     /**
-     * acceptEdits: aceita edições de arquivo sem perguntar, mas continua barrando
-     * o resto. Em modo -p não existe prompt de permissão — o que não é aceito,
-     * falha. Se quiser soltar tudo (só faz sentido em máquina sua), use
-     * bypassPermissions.
+     * Em modo -p não existe prompt de permissão: o que não é aprovado de
+     * antemão, falha calado. Por isso o padrão é `auto`, e não `acceptEdits`.
+     *
+     * `acceptEdits` libera edição de arquivo e mais nada — em particular, NÃO
+     * libera ferramenta de MCP. Era isso que fazia o Jira "não carregar": o
+     * servidor Atlassian estava conectado e autenticado, a ferramenta existia,
+     * e a chamada morria com `permission_denied`. Nem `--allowedTools` nem
+     * `permissions.allow` no settings valem para MCP (testado no CLI 2.1.251);
+     * só o modo resolve. `auto` aprova o que é de baixo risco — leitura,
+     * edição, MCP — e continua barrando o que é perigoso de verdade.
+     *
+     * Quem quiser soltar tudo (só faz sentido em máquina sua) usa
+     * `bypassPermissions`. Modos que não alcançam MCP: `acceptEdits`,
+     * `dontAsk`, `manual`, `plan`.
      */
-    permissionMode: process.env.CLAUDE_PERMISSION_MODE ?? 'acceptEdits',
+    permissionMode: process.env.CLAUDE_PERMISSION_MODE ?? 'auto',
     model: process.env.CLAUDE_MODEL,
     /** Sobe o processo assim que a primeira aba conecta. */
     autoStart: process.env.CLAUDE_AUTOSTART !== 'false',

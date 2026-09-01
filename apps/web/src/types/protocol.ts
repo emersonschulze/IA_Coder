@@ -2,6 +2,7 @@ import type {
   Agent,
   AuthState,
   ConversationState,
+  McpState,
   ImageAttachment,
   VoiceHealth,
   AgentState,
@@ -46,7 +47,15 @@ export type ServerEvent =
   | { type: 'usage'; usage: Usage }
   | { type: 'tree.subjects'; graph: SubjectGraph; status: TreeStatus }
   | { type: 'tree.detail'; detail: SubjectDetail | null }
-  | { type: 'knowledge.saved'; id: string; title: string }
+  | { type: 'knowledge.saved'; id: string; title: string; created: boolean }
+  /**
+   * A execução reaproveitou assuntos do Tree.
+   *
+   * É o que permite a tela oferecer "Atualizar «assunto»" em vez de "Guardar":
+   * se esta análise nasceu em cima de um assunto que já existe, gravá-la como
+   * novo cria um duplicado — e o que a pessoa quer é reescrever aquele.
+   */
+  | { type: 'knowledge.reused'; subjects: { id: string; title: string }[] }
   | { type: 'archives.sync'; archives: Artifact[] }
   | { type: 'archive.added'; archive: Artifact }
   | { type: 'assistant.say'; text: string; speak?: boolean }
@@ -60,6 +69,9 @@ export type ServerEvent =
   | { type: 'conversation.say'; text: string }
   | { type: 'auth.login.line'; line: string }
   | { type: 'auth.login.done'; ok: boolean; urls: string[] }
+  | { type: 'mcp.state'; mcp: McpState }
+  | { type: 'mcp.login.line'; server: string; line: string }
+  | { type: 'mcp.login.done'; server: string; ok: boolean; urls: string[] }
   | { type: 'pong' }
   | { type: 'error'; message: string };
 
@@ -79,11 +91,25 @@ export type ClientCommand =
   | { type: 'conversation.confirm'; accept: boolean }
   | { type: 'auth.check' }
   | { type: 'auth.login'; mode?: 'shell' | 'window' }
+  | { type: 'mcp.check' }
+  | { type: 'mcp.login'; server: string; mode?: 'shell' | 'window' }
+  | { type: 'mcp.dismiss' }
   | { type: 'artifact.open'; path: string; reveal?: boolean }
   | { type: 'tree.list' }
   | { type: 'tree.open'; subjectId: string }
   | { type: 'knowledge.save' }
   | { type: 'knowledge.forget'; subjectId: string }
+  /** Descarta a análise atual sem gravar nada — some o convite de guardar. */
+  | { type: 'knowledge.discard' }
+  /**
+   * Grava um assunto ESCRITO POR VOCÊ, sem passar pelo agente.
+   *
+   * O caminho automático (`knowledge.save`) só existe depois de uma execução
+   * terminar, e pede ao agente que resuma a conversa. Uma análise feita só no
+   * Talking nunca chegava lá — e era justamente a que valia a pena guardar.
+   * Aqui o título e o contexto são seus; nada é inferido.
+   */
+  | { type: 'knowledge.manual'; title: string; summary: string; tags?: string[] }
   | { type: 'ping' };
 
 export type ConnectionState = 'connecting' | 'open' | 'reconnecting' | 'closed';

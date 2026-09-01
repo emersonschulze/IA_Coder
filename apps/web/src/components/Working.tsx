@@ -12,21 +12,35 @@ const STATE_TAG: Record<string, string> = {
   cancelled: '■ ABORTADO',
 };
 
-export function Working() {
+interface Props {
+  /** Abre o arquivo gerado com o programa padrão do Windows (comando `artifact.open`). */
+  onOpenArtifact: (path: string, reveal?: boolean) => void;
+}
+
+export function Working({ onOpenArtifact }: Props) {
   const workflow = useSession((state) => state.workflow);
   const blocks = useSession((state) => state.blocks);
   const agents = useSession((state) => state.agents);
   const skills = useSession((state) => state.skills);
   const connection = useSession((state) => state.connection);
 
+  const investigando = workflow?.kind === 'investigation';
   const agentById = new Map(agents.map((agent) => [agent.id, agent]));
   const skillById = new Map(skills.map((skill) => [skill.id, skill]));
 
   return (
     <section className={[panels.panel, styles.working].join(' ')}>
+      {/*
+        Duas naturezas no mesmo painel. Execução é o que nasce do "pode ir";
+        investigação é o agente lendo o projeto para responder no Talking. As
+        duas aparecem aqui, porque ler também é trabalho — mas dizer qual é
+        importa: numa ele está mexendo nos seus arquivos, na outra não.
+      */}
       <header className={styles.header}>
         <div className={styles.kicker}>
-          {workflow ? `Workflow ativo · ${workflow.id}` : 'Nenhum workflow em execução'}
+          {workflow
+            ? `${investigando ? 'Investigando' : 'Workflow ativo'} · ${workflow.id}`
+            : 'Nenhum workflow em execução'}
         </div>
         <h1 className={[styles.title, workflow ? '' : styles.titleIdle].filter(Boolean).join(' ')}>
           {workflow?.title ?? 'Descreva na caixa ao lado o que você quer construir.'}
@@ -41,12 +55,19 @@ export function Working() {
               .filter(Boolean)
               .join(' ')}
           >
-            {STATE_TAG[workflow?.state ?? 'idle']}
+            {investigando && workflow?.state === 'running'
+              ? '◈ INVESTIGANDO'
+              : STATE_TAG[workflow?.state ?? 'idle']}
           </span>
-          <span className={styles.tag}>{blocks.length} agentes</span>
-          {workflow && (
+          <span className={styles.tag}>
+            {blocks.length} {blocks.length === 1 ? 'agente' : 'agentes'}
+          </span>
+          {/* Nunca soube quantos passos faltam: passo e total são o mesmo
+              contador de ferramentas. Somar 1 dava "etapa 3/2". É contagem,
+              não progresso — então é assim que se mostra. */}
+          {workflow && workflow.step > 0 && (
             <span className={styles.tag}>
-              etapa {workflow.step + 1}/{workflow.totalSteps}
+              {workflow.step} {workflow.step === 1 ? 'passo' : 'passos'}
             </span>
           )}
           {workflow?.etaSeconds !== undefined && (
@@ -72,6 +93,7 @@ export function Working() {
               agent={agentById.get(block.agentId)}
               skill={block.skillId ? skillById.get(block.skillId) : undefined}
               position={index + 1}
+              onOpenArtifact={onOpenArtifact}
             />
           ))
         )}

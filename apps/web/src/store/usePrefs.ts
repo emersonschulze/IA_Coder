@@ -11,15 +11,21 @@ const KEY = 'iacoder.prefs.pinActive';
 
 const read = (): boolean => {
   try {
-    return localStorage.getItem(KEY) === 'on';
+    const guardado = localStorage.getItem(KEY);
+    // Ligado por padrão, desligado só se você desligar. O padrão era o contrário
+    // quando a lista tinha sete skills escritas à mão; com o catálogo real, são
+    // dezenas, e o cartão em uso vive fora da vista — junto com a seta que
+    // aponta para ele.
+    return guardado === null ? true : guardado === 'on';
   } catch {
-    return false;
+    return true;
   }
 };
 
 export const usePrefs = create<PrefsState>((set) => ({
-  // Desligado por padrão: lista estável é mais fácil de ler.
-  // Ligue no cadeado do cabeçalho do painel e sinta a diferença.
+  // Ligado por padrão: com dezenas de agentes e skills, o que está acontecendo
+  // agora tem de estar visível. Desligue no cadeado do cabeçalho se preferir a
+  // lista sempre na mesma ordem.
   pinActive: read(),
   setPinActive: (pinActive) => {
     try {

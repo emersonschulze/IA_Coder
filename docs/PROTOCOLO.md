@@ -5,6 +5,12 @@ Todo evento tem um campo `type`. Fonte da verdade dos tipos: `apps/web/src/types
 
 ## Cliente → Servidor (`ClientCommand`)
 
+> A lista abaixo tem de bater **linha a linha** com a união `ClientCommand` de
+> `apps/server/src/protocol.ts` — é ela que o `handle()` aceita de fato. Revisar o
+> contrato (endurecer o socket, escrever outro cliente, montar uma allowlist) é
+> comparar as duas listas, nunca só ler esta tabela: já aconteceu de `artifact.open`
+> — que roda arquivo na máquina — ficar de fora daqui e passar batido numa revisão.
+
 | type | payload | efeito |
 |---|---|---|
 | `conversation.input` | `{ text, images? }` | **o jeito único de pedir algo.** Fala com o Talking; se virar um plano e o usuário confirmar, é isso que dispara o workflow. `images` é opcional, uma lista de `{ mediaType, data, name? }` em base64. |
@@ -18,10 +24,18 @@ Todo evento tem um campo `type`. Fonte da verdade dos tipos: `apps/web/src/types
 | `project.set` | `{ path }` | troca a pasta do projeto, salva nas preferências e reabre os processos |
 | `project.pick` | `{}` | abre o seletor de pastas do Windows e já troca o projeto |
 | `runtime.restart` | `{ target: 'shell' \| 'claude' \| 'both' }` | reabre os processos na pasta atual |
+| `artifact.open` | `{ path, reveal? }` | **efeito local:** manda o Windows abrir o arquivo (`start`) ou selecioná-lo no Explorer (`reveal: true`). Só aceita caminho dentro da pasta de artefatos ou do projeto, e recusa executável quando não é `reveal` (`apps/server/src/picker.ts`) |
 | `tree.list` | `{}` | pede o nível 1 do Tree (assuntos) |
 | `tree.open` | `{ subjectId }` | pede o nível 2 (stack daquele assunto) |
 | `knowledge.save` | `{}` | grava a análise atual como assunto reutilizável |
 | `knowledge.forget` | `{ subjectId }` | apaga um assunto |
+| `knowledge.discard` | `{}` | descarta a análise atual sem gravar; só some o convite de guardar (nada foi ao banco) |
+| `knowledge.manual` | `{ title, summary, tags? }` | grava um assunto escrito por você, sem passar pelo agente — funciona com o Claude fora do ar |
+| `auth.check` | `{}` | reconfere a credencial do Claude (`claude auth`) e reemite `auth.state` |
+| `auth.login` | `{ mode?: 'shell' \| 'window' }` | **efeito local:** dispara `claude auth login --claudeai`. `shell` (padrão) usa o PowerShell já aberto e transmite a saída em `auth.login.line`; `window` abre um terminal visível. Ao dar certo, reabre o processo do Claude |
+| `mcp.check` | `{}` | revarre os servidores MCP (`claude mcp list`) |
+| `mcp.login` | `{ server, mode?: 'shell' \| 'window' }` | roda `claude mcp login "<server>"`. `shell` (padrão) usa o PowerShell que já está aberto e transmite a saída; `window` abre um terminal visível |
+| `mcp.dismiss` | `{}` | você fechou o aviso de servidor bloqueado; limpa `blocked` |
 | `ping` | `{}` | keepalive; servidor responde `pong` |
 
 ## Servidor → Cliente (`ServerEvent`)
@@ -90,14 +104,48 @@ começa sabendo, em vez de investigar tudo de novo. Cada reaproveitamento
 incrementa `hits`, que aparece no tamanho e na cor do nó.
 
 ### Talking (conversa — texto, voz e imagem, tudo pela mesma caixa)
-- `conversation.state` — `{ active, thinking, pending }` onde a conversa está e qual
-  plano espera aprovação. `active` é só o microfone (mão-livre); digitar funciona
-  independente disso.
+- `conversation.state` — `{ active, thinking, executing, pending }` onde a conversa
+  está e qual plano espera aprovação. `active` é só o microfone (mão-livre); digitar
+  funciona independente disso. `thinking` é o turno de conversa; `executing` é uma
+  execução aprovada em curso — enquanto ela roda, a conversa não é atendida (uma
+  pergunta no meio sequestraria o turno da execução) e a caixa de texto avisa.
 - `conversation.turn` — `{ role, text, images? }` cada fala, sua e dele, para a
   transcrição. `images` são as imagens anexadas naquela fala (mesmo formato de
   `conversation.input`), usadas para desenhar as miniaturas na bolha.
 - `conversation.say` — `{ text }` **o que deve ser falado em voz alta**.
 - `voice.health` — `{ stt, tts, wakeWord }` quais serviços locais estão de pé.
+
+`turn` e `say` carregam textos DIFERENTES quando o agente responde em prosa: o
+`turn` vai inteiro (é o que fica escrito e legível) e o `say` é a versão curta,
+sem marcação e cortada numa fronteira de frase (é o que a voz lê). Eram o mesmo
+texto até a resposta escrita começar a aparecer picotada no meio da palavra — a
+tela herdava um limite que só existia por causa do som.
+
+### MCP (servidores conectados ao Claude Code)
+- `mcp.state` — `{ servers, checkedAt, checking, reachable, permissionMode, blocked }`
+  quem está configurado e se dá para usar.
+- `mcp.login.line` — `{ server, line }` a saída do login, ao vivo.
+- `mcp.login.done` — `{ server, ok, urls }` fim do login e os endereços de
+  autorização que apareceram.
+
+Duas coisas diferentes derrubam uma ferramenta de MCP, e o protocolo separa as
+duas porque o conserto não é o mesmo:
+
+1. **Sem credencial** — o servidor vem com `status: 'needs-auth'`. Resolve com
+   `mcp.login`, que é OAuth e abre o navegador. Depois de aprovar, o servidor
+   reabre o processo do Claude sozinho: sem isso a credencial nova só valeria na
+   próxima vez que ele subisse.
+2. **Sem permissão** — `reachable: false`. O processo roda em modo não
+   interativo, e um `--permission-mode` como `acceptEdits` NÃO alcança ferramenta
+   de MCP: o servidor aparece conectado, a ferramenta existe, e toda chamada
+   volta `permission_denied`. Aqui login nenhum resolve — só o modo. Medido no
+   CLI 2.1.251: nem `--allowedTools mcp__servidor`, nem o nome completo da
+   ferramenta, nem `permissions.allow` no `--settings` mudam isso. Modos que
+   alcançam: `auto` (padrão nosso) e `bypassPermissions`.
+
+`blocked` conta que uma ferramenta acabou de ser barrada, com o motivo já
+classificado — é o que faz o popup abrir sozinho no momento em que resolve
+alguma coisa, em vez de a cada resposta.
 
 Duas regras que valem mais que o resto:
 
@@ -141,7 +189,7 @@ transcrição.
 // ← o agente conversa, propõe um plano...
 { "type": "conversation.turn", "role": "user", "text": "crie o CRUD de clientes em C# e a tela em React" }
 { "type": "conversation.turn", "role": "agent", "text": "Beleza, vou fazer o CRUD de clientes: API em C# e a tela em React. Posso ir?" }
-{ "type": "conversation.state", "state": { "active": false, "thinking": false, "pending": { "title": "crie o CRUD…", "steps": ["..."], "risk": "low" } } }
+{ "type": "conversation.state", "state": { "active": false, "thinking": false, "executing": false, "pending": { "title": "crie o CRUD…", "steps": ["..."], "risk": "low" } } }
 
 // → usuário confirma
 { "type": "conversation.confirm", "accept": true }

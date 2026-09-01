@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { config } from './config.js';
 
 export interface Prefs {
@@ -11,7 +11,11 @@ export interface Prefs {
 
 const MAX_RECENTS = 8;
 
-const fallback = (): Prefs => ({ projectPath: config.defaultProjectPath, recents: [] });
+/** Chave de comparação de pasta: no Windows, caixa e barra não distinguem nada. */
+const chave = (caminho: string): string =>
+  resolve(caminho).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+
+const fallback = (): Prefs => ({ projectPath: resolve(config.defaultProjectPath), recents: [] });
 
 let cache: Prefs | null = null;
 
@@ -26,7 +30,9 @@ export function readPrefs(): Prefs {
     if (existsSync(config.prefsFile)) {
       const parsed = JSON.parse(readFileSync(config.prefsFile, 'utf8')) as Partial<Prefs>;
       cache = {
-        projectPath: parsed.projectPath || config.defaultProjectPath,
+        // Também aqui: o arquivo pode ter sido escrito à mão no Bloco de Notas,
+        // e `DEFAULT_PROJECT_PATH` vem do ambiente do jeito que a pessoa digitou.
+        projectPath: resolve(parsed.projectPath || config.defaultProjectPath),
         recents: Array.isArray(parsed.recents) ? parsed.recents.slice(0, MAX_RECENTS) : [],
       };
       return cache;
@@ -41,9 +47,19 @@ export function readPrefs(): Prefs {
 export function writePrefs(next: Partial<Prefs>): Prefs {
   const merged: Prefs = { ...readPrefs(), ...next };
   if (next.projectPath) {
+    // Normaliza na porta de entrada, uma vez só.
+    //
+    // `C:/Repo/X`, `C:\Repo\X` e `c:\repo\x` são a MESMA pasta e todas passam no
+    // `stat`, mas o caminho cru viajava até a descoberta de plugins, que compara
+    // com o que o Claude Code gravou (sempre com barra invertida): a comparação
+    // falhava, o plugin de escopo `project` era descartado em silêncio e os
+    // skills dele sumiam do painel. De quebra, o mesmo projeto entrava duas
+    // vezes em Recentes, uma por barra escolhida.
+    const canonico = resolve(next.projectPath);
+    merged.projectPath = canonico;
     merged.recents = [
-      next.projectPath,
-      ...merged.recents.filter((item) => item !== next.projectPath),
+      canonico,
+      ...merged.recents.filter((item) => chave(item) !== chave(canonico)),
     ].slice(0, MAX_RECENTS);
   }
   cache = merged;

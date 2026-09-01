@@ -8,6 +8,8 @@ import styles from './Panels.module.css';
 interface Props {
   onList: () => void;
   onOpen: (subjectId: string) => void;
+  /** Abre o formulário de assunto escrito por você. */
+  onNewSubject: () => void;
 }
 
 /** Cada tipo de peça da stack tem sua cor — dá para ler o desenho sem legenda. */
@@ -39,6 +41,14 @@ const STATUS_MESSAGE: Record<string, string> = {
   connecting: 'procurando o banco…',
   unreachable:
     'o Postgres não respondeu. Suba com “docker compose up -d” — o Tree acende sozinho em até 10s, sem reiniciar nada.',
+  /*
+   * Este é o caso em que o `docker compose up -d` NÃO resolve — e dizer que
+   * resolve manda a pessoa rodar em círculos: o container está saudável, o
+   * `netstat` mostra a porta escutando, e mesmo assim toda conexão morre. Quem
+   * está escutando é um relay órfão da WSL, que aceita e não encaminha.
+   */
+  'relay-broken':
+    'o Postgres está de pé, mas o encaminhamento de porta da WSL quebrou: alguém atende na 5433 e derruba a conexão. Subir o container de novo não resolve. No PowerShell: “wsl --shutdown”, reabra a WSL e rode “docker compose up -d”.',
   'schema-missing':
     'o banco está de pé, mas foi criado antes do Tree de dois níveis. Aplique a migração:\ndocker exec -i ia_coder_postgres psql -U iacoder -d iacoder < db/migrations/001_tree_dois_niveis.sql',
 };
@@ -50,7 +60,7 @@ const STATUS_MESSAGE: Record<string, string> = {
  * Clicou num assunto → nível 2: quais micro frontends, serviços, bancos e
  * caches participam daquela demanda, e como se ligam.
  */
-export function TreePanel({ onList, onOpen }: Props) {
+export function TreePanel({ onList, onOpen, onNewSubject }: Props) {
   const graph = useSession((state) => state.tree);
   const status = useSession((state) => state.treeStatus);
   const detail = useSession((state) => state.treeDetail);
@@ -122,7 +132,24 @@ export function TreePanel({ onList, onOpen }: Props) {
           >
             ←
           </button>
-        ) : undefined
+        ) : (
+          /*
+           * A saída manual, sempre à mão.
+           *
+           * O convite automático só aparece depois de uma execução terminar —
+           * análise feita só conversando nunca chegava lá, e era justamente a
+           * que valia guardar. Aqui não depende de nada: nem do agente, nem de
+           * ter rodado alguma coisa.
+           */
+          <button
+            type="button"
+            className={styles.headAction}
+            onClick={onNewSubject}
+            title="Guardar um assunto escrito por você (ou digite /tree no Talking)"
+          >
+            ＋
+          </button>
+        )
       }
       style={{ flex: '1 1 0px', minHeight: 220 }}
     >
@@ -149,7 +176,7 @@ export function TreePanel({ onList, onOpen }: Props) {
           onSelect={openSubject}
           empty={
             status === 'ok'
-              ? 'nenhum assunto guardado ainda — termine uma análise e clique em “Guardar no Tree”'
+              ? 'nenhum assunto guardado ainda — use o ＋ aqui em cima, ou digite /tree no Talking'
               : STATUS_MESSAGE[status]
           }
         />

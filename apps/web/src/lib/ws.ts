@@ -25,6 +25,16 @@ export class IaCoderSocket {
   private disposed = false;
   private retryTimer: number | null = null;
   private pingTimer: number | null = null;
+  /**
+   * Ping enviado e ainda sem `pong` de volta.
+   *
+   * Num link meio-aberto — notebook que hiberna, troca de Wi-Fi para o cabo —
+   * não chega FIN: `onclose` não dispara, `readyState` continua OPEN e o
+   * `send()` abaixo entrega o comando ao buffer do kernel sem erro nenhum. O
+   * pedido some sem entrar na fila e sem reconexão, que é justamente o caso
+   * para o qual a fila existe.
+   */
+  private awaitingPong = false;
 
   constructor(options: Options) {
     this.url = options.url ?? DEFAULT_URL;
@@ -60,7 +70,11 @@ export class IaCoderSocket {
       } catch {
         return;
       }
-      if (isServerEvent(parsed)) this.onEvent(parsed);
+      if (!isServerEvent(parsed)) return;
+      // Qualquer frame prova que o link está vivo, mas o `pong` é o único que
+      // chega mesmo quando não há nada acontecendo do lado do servidor.
+      if (parsed.type === 'pong') this.awaitingPong = false;
+      this.onEvent(parsed);
     };
 
     socket.onclose = (event) => {
@@ -113,11 +127,23 @@ export class IaCoderSocket {
 
   private startKeepalive(): void {
     this.stopKeepalive();
-    this.pingTimer = window.setInterval(() => this.send({ type: 'ping' }), 20_000);
+    this.pingTimer = window.setInterval(() => {
+      // O ping anterior ficou sem resposta: o link está morto por baixo, mesmo
+      // com o `readyState` dizendo OPEN. Fechar à mão é o que aciona
+      // `onclose` → `scheduleRetry` e faz os próximos comandos irem para a
+      // fila, em vez de se perderem num socket que ninguém está lendo.
+      if (this.awaitingPong) {
+        this.socket?.close();
+        return;
+      }
+      this.awaitingPong = true;
+      this.send({ type: 'ping' });
+    }, 20_000);
   }
 
   private stopKeepalive(): void {
     if (this.pingTimer !== null) window.clearInterval(this.pingTimer);
     this.pingTimer = null;
+    this.awaitingPong = false;
   }
 }

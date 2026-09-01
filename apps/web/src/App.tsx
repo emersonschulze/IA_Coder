@@ -3,7 +3,9 @@ import { AnchorProvider } from '@/anchors/AnchorContext';
 import { AgentsPanel } from '@/components/AgentsPanel';
 import { AuthGate } from '@/components/AuthGate';
 import { ConversationPanel } from '@/components/ConversationPanel';
+import { McpGate } from '@/components/McpGate';
 import { ProjectPicker } from '@/components/ProjectPicker';
+import { SubjectDialog } from '@/components/SubjectDialog';
 import { SkillsPanel } from '@/components/SkillsPanel';
 import { StatusArchivesPanel } from '@/components/StatusArchivesPanel';
 import { Topbar } from '@/components/Topbar';
@@ -22,10 +24,14 @@ export default function App() {
   const workflowId = useSession((state) => state.workflow?.id);
   const conversationActive = useSession((state) => state.conversation.active);
   const focusing = useSession(selectIsFocusing);
+  const mcpBlocked = useSession((state) => state.mcp?.blocked ?? null);
 
   const speech = useSpeechOutput();
   const socket = useRef<IaCoderSocket | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [mcpOpen, setMcpOpen] = useState(false);
+  /** `null` = fechado. String = aberto, com o nome já sugerido. */
+  const [subjectForm, setSubjectForm] = useState<string | null>(null);
 
   useEffect(() => {
     const client = new IaCoderSocket({
@@ -71,6 +77,15 @@ export default function App() {
     socket.current?.send({ type: 'knowledge.save' });
   }, []);
 
+  const discardKnowledge = useCallback(() => {
+    socket.current?.send({ type: 'knowledge.discard' });
+  }, []);
+
+  const saveSubjectManually = useCallback((title: string, summary: string, tags: string[]) => {
+    socket.current?.send({ type: 'knowledge.manual', title, summary, tags });
+    setSubjectForm(null);
+  }, []);
+
   const openArtifact = useCallback((path: string, reveal?: boolean) => {
     socket.current?.send({ type: 'artifact.open', path, reveal });
   }, []);
@@ -86,6 +101,39 @@ export default function App() {
   const recheckAuth = useCallback(() => {
     socket.current?.send({ type: 'auth.check' });
   }, []);
+
+  const openMcpLogin = useCallback((server: string) => {
+    socket.current?.send({ type: 'mcp.login', server, mode: 'shell' });
+  }, []);
+
+  const openMcpLoginWindow = useCallback((server: string) => {
+    if (server) socket.current?.send({ type: 'mcp.login', server, mode: 'window' });
+  }, []);
+
+  const recheckMcp = useCallback(() => {
+    socket.current?.send({ type: 'mcp.check' });
+  }, []);
+
+  /*
+   * Fechar o aviso avisa o SERVIDOR, não só a tela.
+   *
+   * `blocked` fica guardado lá; sem esse recado, qualquer aba que recarregasse
+   * receberia o mesmo bloqueio de novo e o popup voltaria sozinho para um
+   * problema que você já viu.
+   */
+  const closeMcp = useCallback(() => {
+    setMcpOpen(false);
+    if (mcpBlocked) socket.current?.send({ type: 'mcp.dismiss' });
+  }, [mcpBlocked]);
+
+  /*
+   * Uma ferramenta de MCP barrada abre o popup sozinha — é o único momento em
+   * que ele aparece sem você pedir, e é o momento em que ele resolve alguma
+   * coisa: você acabou de perguntar algo que dependia daquele servidor.
+   */
+  useEffect(() => {
+    if (mcpBlocked) setMcpOpen(true);
+  }, [mcpBlocked]);
 
   const startConversation = useCallback(() => {
     socket.current?.send({ type: 'conversation.start' });
@@ -131,26 +179,33 @@ export default function App() {
           onToggleTts={() => speech.setEnabled(!speech.enabled)}
           conversationActive={conversationActive}
           onToggleConversation={() => (conversationActive ? stopConversation() : startConversation())}
+          onOpenMcp={() => setMcpOpen(true)}
         />
 
         <div className={stageClass}>
           <div className={styles.column}>
             <AgentsPanel onInspect={inspect} />
             <SkillsPanel />
-            <StatusArchivesPanel />
+            <StatusArchivesPanel onOpenArtifact={openArtifact} />
           </div>
 
-          <Working />
+          <Working onOpenArtifact={openArtifact} />
 
           <div className={styles.column}>
             <ConversationPanel
               onInput={conversationInput}
               onConfirm={confirmPlan}
               onSaveKnowledge={saveKnowledge}
+              onDiscardKnowledge={discardKnowledge}
+              onOpenSubjectForm={(title) => setSubjectForm(title)}
               onOpenArtifact={openArtifact}
               ttsEnabled={speech.enabled}
             />
-            <TreePanel onList={listSubjects} onOpen={openSubject} />
+            <TreePanel
+              onList={listSubjects}
+              onOpen={openSubject}
+              onNewSubject={() => setSubjectForm('')}
+            />
           </div>
         </div>
       </div>
@@ -158,6 +213,23 @@ export default function App() {
       <WireLayer />
 
       <AuthGate onLogin={openLogin} onLoginWindow={openLoginWindow} onRecheck={recheckAuth} />
+
+      {mcpOpen && (
+        <McpGate
+          onLogin={openMcpLogin}
+          onLoginWindow={openMcpLoginWindow}
+          onRecheck={recheckMcp}
+          onClose={closeMcp}
+        />
+      )}
+
+      {subjectForm !== null && (
+        <SubjectDialog
+          initialTitle={subjectForm}
+          onSave={saveSubjectManually}
+          onClose={() => setSubjectForm(null)}
+        />
+      )}
 
       {pickerOpen && (
         <ProjectPicker

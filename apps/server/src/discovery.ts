@@ -1,6 +1,6 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 /**
  * Quem está realmente disponível nesta máquina.
@@ -17,6 +17,17 @@ export interface CatalogEntry {
   description: string;
   /** De onde veio: o nome do plugin, "projeto" ou "pessoal". */
   source: string;
+  /**
+   * A PASTA onde isto mora em disco.
+   *
+   * Existe por um motivo concreto: alguns agentes de terceiros não invocam a
+   * ferramenta `Skill` — o AGENT.md deles manda "antes de usar uma skill, leia
+   * o arquivo correspondente" e lista `skills/planejar-e2e/SKILL.md`. Então,
+   * nesta máquina, usar uma skill É ler esse arquivo. Sem saber onde cada uma
+   * mora, esse uso fica invisível e o painel jura que ninguém usou skill
+   * nenhuma.
+   */
+  dir: string;
 }
 
 export interface DiscoveredCatalog {
@@ -82,6 +93,7 @@ async function entryFrom(
   fallbackName: string,
   kind: 'agent' | 'skill',
   source: string,
+  dir = dirname(path),
 ): Promise<CatalogEntry | null> {
   const raw = await read(path);
   if (raw === null) return null;
@@ -96,7 +108,7 @@ async function entryFrom(
   const body = meta.description
     ?? text.split('\n').find((line) => line.trim() && !line.startsWith('#') && !line.startsWith('---'))
     ?? '';
-  return { id: `${kind}:${source}:${name}`, name, description: summarize(body), source };
+  return { id: `${kind}:${source}:${name}`, name, description: summarize(body), source, dir };
 }
 
 /** Prioridade do arquivo dentro da pasta de um agente: menor vem primeiro. */

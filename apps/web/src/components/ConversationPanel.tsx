@@ -3,6 +3,7 @@ import { useVoiceLoop } from '@/hooks/useVoiceLoop';
 import { useVoiceOut } from '@/hooks/useVoiceOut';
 import { useSession } from '@/store/useSession';
 import type { ImageAttachment } from '@/types/domain';
+import { BubbleText } from './BubbleText';
 import { Panel } from './Panel';
 import styles from './ConversationPanel.module.css';
 
@@ -10,6 +11,10 @@ interface Props {
   onInput: (text: string, images?: ImageAttachment[]) => void;
   onConfirm: (accept: boolean) => void;
   onSaveKnowledge: () => void;
+  /** Recusa guardar esta análise — o convite some e nada vai para o banco. */
+  onDiscardKnowledge: () => void;
+  /** `/tree` — abre o formulário de assunto escrito por você. */
+  onOpenSubjectForm: (title: string) => void;
   /** Abre o arquivo gerado com o programa padrão do Windows. */
   onOpenArtifact: (path: string, reveal?: boolean) => void;
   /** O botão 🔊 da barra. */
@@ -90,7 +95,10 @@ async function toAttachment(file: File): Promise<Attachment> {
  * mãos livres; escrever sempre funcionou e continua funcionando com ele
  * desligado.
  */
-export function ConversationPanel({ onInput, onConfirm, onSaveKnowledge, onOpenArtifact, ttsEnabled }: Props) {
+export function ConversationPanel({
+  onInput, onConfirm, onSaveKnowledge, onDiscardKnowledge, onOpenSubjectForm, onOpenArtifact,
+  ttsEnabled,
+}: Props) {
   const conversation = useSession((state) => state.conversation);
   const turns = useSession((state) => state.turns);
   const voice = useSession((state) => state.voice);
@@ -99,12 +107,23 @@ export function ConversationPanel({ onInput, onConfirm, onSaveKnowledge, onOpenA
   const result = useSession((state) => state.result);
   const workflowState = useSession((state) => state.workflow?.state);
   const treeReady = useSession((state) => state.treeStatus === 'ok');
+  const reused = useSession((state) => state.reusedSubjects);
 
   const [error, setError] = useState<string | null>(null);
   const [heard, setHeard] = useState<string | null>(null);
   const [typed, setTyped] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [saved, setSaved] = useState(false);
+  /*
+   * Já respondi este plano.
+   *
+   * Sem isto o clique não deixava rastro nenhum na tela: com o servidor fora do
+   * ar, o `IaCoderSocket` guarda o comando na fila e o entrega sozinho na
+   * reconexão — o usuário concluía que não passou, saía da frente do
+   * computador, e 15s depois a execução começava sem ninguém olhando. O botão
+   * agora ou está bloqueado (offline) ou diz que a resposta saiu.
+   */
+  const [answered, setAnswered] = useState(false);
   const feed = useRef<HTMLDivElement>(null);
   const bars = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -119,7 +138,19 @@ export function ConversationPanel({ onInput, onConfirm, onSaveKnowledge, onOpenA
 
   // O botão de guardar só faz sentido depois que a análise terminou bem.
   const canSave = workflowState === 'done' && treeReady;
+  /*
+   * Guardar e atualizar são ações diferentes e a tela precisa dizer qual é.
+   *
+   * Se esta análise nasceu em cima de um assunto que já está no Tree, gravá-la
+   * como nova não cria conhecimento: cria um segundo assunto sobre a mesma
+   * coisa, e da próxima vez os dois voltam como contexto. O que se quer ali é
+   * reescrever aquele — e o botão tem que dizer isso ANTES do clique, não
+   * depois.
+   */
+  const updating = reused[0] ?? null;
   useEffect(() => setSaved(false), [workflowState]);
+  // Plano novo (ou plano que sumiu) libera os botões de novo.
+  useEffect(() => setAnswered(false), [conversation.pending]);
 
   const addFiles = useCallback((files: FileList | File[] | null) => {
     const images = Array.from(files ?? []).filter((file) => file.type.startsWith('image/'));
@@ -179,14 +210,31 @@ export function ConversationPanel({ onInput, onConfirm, onSaveKnowledge, onOpenA
   const submitMessage = useCallback(() => {
     const value = typed.trim();
     if (!value && attachments.length === 0) return;
-    if (conversation.thinking) return;
+
+    /*
+     * `/tree` não é uma mensagem para o agente — é um comando da ferramenta.
+     *
+     * Vale mesmo com ele pensando ou fora do ar: guardar o que VOCÊ entendeu
+     * não depende de nenhum turno. O que vem depois do comando vira o nome
+     * sugerido do nó, então `/tree identidade e SSO` já abre preenchido.
+     */
+     const comando = /^\/(tree|assunto|salvar)\s*/i.exec(value);
+    if (comando) {
+      onOpenSubjectForm(value.slice(comando[0].length).trim());
+      setTyped('');
+      return;
+    }
+
+    // Durante uma execução o servidor não atende a conversa: a pergunta
+    // sequestraria o turno da execução. Não adianta mandar.
+    if (conversation.thinking || conversation.executing) return;
     const images = attachments.length > 0
       ? attachments.map(({ mediaType, data, name }) => ({ mediaType, data, name }))
       : undefined;
     onInput(value || 'Veja a imagem em anexo.', images);
     setTyped('');
     setAttachments([]);
-  }, [typed, attachments, conversation.thinking, onInput]);
+  }, [typed, attachments, conversation.thinking, conversation.executing, onInput, onOpenSubjectForm]);
 
   // Ctrl+Enter envia de qualquer lugar da tela — o velho hábito continua valendo.
   useEffect(() => {
@@ -264,6 +312,14 @@ export function ConversationPanel({ onInput, onConfirm, onSaveKnowledge, onOpenA
   // De onde sai o som importa: "mudo" explica por que você não ouve nada.
   const voiceBadge = out.source === 'piper' ? '' : ` · voz ${out.source}`;
 
+  // Por que os botões do plano estão bloqueados, quando estão. `null` = livres.
+  const planTitle =
+    connection !== 'open'
+      ? 'sem link com o servidor'
+      : answered
+        ? 'resposta já enviada — esperando o servidor'
+        : null;
+
   return (
     <Panel
       title="Talking"
@@ -308,10 +364,16 @@ export function ConversationPanel({ onInput, onConfirm, onSaveKnowledge, onOpenA
                   ))}
                 </div>
               )}
-              {turn.text}
+              <BubbleText text={turn.text} />
             </div>
           ))}
+          {/* O que ele está FAZENDO aparece no centro, como bloco e seta —
+              ler arquivo é trabalho, e trabalho não mora na conversa. Aqui fica
+              só o sinal de que ele está pensando. */}
           {conversation.thinking && <div className={styles.thinking}>pensando…</div>}
+          {conversation.executing && !conversation.thinking && (
+            <div className={styles.thinking}>executando — te aviso quando terminar</div>
+          )}
 
           {result && (result.artifacts.length > 0 || canSave) && (
             <div className={styles.resultRow}>
@@ -335,18 +397,37 @@ export function ConversationPanel({ onInput, onConfirm, onSaveKnowledge, onOpenA
                 </div>
               )}
               {canSave && (
-                <button
-                  type="button"
-                  className={styles.save}
-                  disabled={saved}
-                  onClick={() => {
-                    onSaveKnowledge();
-                    setSaved(true);
-                  }}
-                  title="Grava esta análise como assunto reutilizável — da próxima vez ela entra como contexto pronto"
-                >
-                  {saved ? '✓ guardado' : '✓ Guardar no Tree'}
-                </button>
+                <div className={styles.keepRow}>
+                  <button
+                    type="button"
+                    className={styles.save}
+                    disabled={saved}
+                    onClick={() => {
+                      onSaveKnowledge();
+                      setSaved(true);
+                    }}
+                    title={updating
+                      ? `Reescreve “${updating.title}” com o que saiu desta análise — resumo e stack`
+                      : 'Grava esta análise como assunto reutilizável — da próxima vez ela entra como contexto pronto'}
+                  >
+                    {saved
+                      ? (updating ? '✓ atualizado' : '✓ guardado')
+                      : (updating ? `↻ Atualizar “${updating.title}”` : '✓ Guardar no Tree')}
+                  </button>
+                  {!saved && (
+                    <button
+                      type="button"
+                      className={styles.discard}
+                      onClick={() => {
+                        onDiscardKnowledge();
+                        setSaved(false);
+                      }}
+                      title="Não guarda nada — esta análise não vira assunto do Tree"
+                    >
+                      ✕ Descartar
+                    </button>
+                  )}
+                </div>
               )}
             </div>
           )}
@@ -372,14 +453,38 @@ export function ConversationPanel({ onInput, onConfirm, onSaveKnowledge, onOpenA
                 ))}
               </ol>
               <div className={styles.confirm}>
-                <button type="button" className={styles.go} onClick={() => onConfirm(true)}>
+                <button
+                  type="button"
+                  className={styles.go}
+                  disabled={connection !== 'open' || answered}
+                  title={planTitle ?? 'Executa o plano acima'}
+                  onClick={() => {
+                    setAnswered(true);
+                    onConfirm(true);
+                  }}
+                >
                   ▶ Pode ir
                 </button>
-                <button type="button" className={styles.no} onClick={() => onConfirm(false)}>
+                <button
+                  type="button"
+                  className={styles.no}
+                  disabled={connection !== 'open' || answered}
+                  title={planTitle ?? 'Descarta o plano — nada é executado'}
+                  onClick={() => {
+                    setAnswered(true);
+                    onConfirm(false);
+                  }}
+                >
                   ✕ Agora não
                 </button>
               </div>
-              <p className={styles.tip}>Ou responda: “pode mandar”.</p>
+              <p className={styles.tip}>
+                {connection !== 'open'
+                  ? 'Sem link com o servidor — a resposta só sai quando a conexão voltar.'
+                  : answered
+                    ? 'Resposta enviada — esperando o servidor.'
+                    : 'Ou responda: “pode mandar”.'}
+              </p>
             </div>
           )}
         </div>
@@ -446,7 +551,7 @@ export function ConversationPanel({ onInput, onConfirm, onSaveKnowledge, onOpenA
                 addFiles(files);
               }
             }}
-            placeholder="Aqui o texto que posso digitar…"
+            placeholder="Aqui o texto que posso digitar… (/tree guarda um assunto)"
           />
           <button
             type="submit"
@@ -454,14 +559,17 @@ export function ConversationPanel({ onInput, onConfirm, onSaveKnowledge, onOpenA
             disabled={
               (!typed.trim() && attachments.length === 0) ||
               connection !== 'open' ||
-              conversation.thinking
+              conversation.thinking ||
+              conversation.executing
             }
             title={
               connection !== 'open'
                 ? 'sem link com o servidor'
-                : conversation.thinking
-                  ? 'espera ele responder…'
-                  : 'Enviar (Enter)'
+                : conversation.executing
+                  ? 'ele está executando — use o Abortar se quiser parar'
+                  : conversation.thinking
+                    ? 'espera ele responder…'
+                    : 'Enviar (Enter)'
             }
           >
             ➤

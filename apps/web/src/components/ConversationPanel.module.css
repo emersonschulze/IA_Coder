@@ -123,10 +123,20 @@
 .mine,
 .theirs {
   max-width: 92%;
+  /* `min-width: 0` num item de coluna flex: sem isso o conteudo largo (um
+     caminho, uma URL) manda na largura e a bolha vaza do painel. */
+  min-width: 0;
   padding: 7px 10px;
   border-radius: 10px;
   font-size: 11.5px;
   line-height: 1.55;
+  /* A resposta chega com quebra de linha e paragrafo. Colapsar tudo numa linha
+     so transformava uma resposta estruturada num paredao ilegivel. */
+  white-space: pre-wrap;
+  /* Palavra sem espaco - caminho do Windows, URL, nome de ferramenta MCP - nao
+     tem onde quebrar sozinha, e sem isto ela some para fora da bolha em vez de
+     descer para a linha de baixo. Era metade do "texto cortado". */
+  overflow-wrap: anywhere;
   animation: pop 0.25s var(--ease);
 }
 .mine {
@@ -196,9 +206,15 @@
   background: color-mix(in srgb, var(--cy) 22%, transparent);
   box-shadow: 0 0 16px -6px var(--cy);
 }
+/* Guardar e descartar lado a lado: a escolha e as duas saidas dela. */
+.keepRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
 .save {
   display: block;
-  margin-top: 8px;
   padding: 6px 11px;
   border: 1px solid color-mix(in srgb, var(--gr) 50%, transparent);
   border-radius: 8px;
@@ -218,6 +234,29 @@
 .save:disabled {
   cursor: default;
   opacity: 0.6;
+}
+
+/*
+ * Descartar e discreto de proposito: e a saida, nao a acao principal. Mas
+ * existe, porque sem ela o convite de guardar fica na tela ate o proximo
+ * workflow e vira ruido que voce aprende a ignorar.
+ */
+.discard {
+  padding: 6px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--txt-faint);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: var(--fast);
+}
+.discard:hover {
+  color: var(--rd);
+  border-color: color-mix(in srgb, var(--rd) 45%, transparent);
 }
 
 /* O plano na mesa, esperando o "pode ir" — última bolha da conversa. */

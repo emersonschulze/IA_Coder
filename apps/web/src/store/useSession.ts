@@ -4,6 +4,7 @@ import type {
   AuthState,
   ConversationState,
   ImageAttachment,
+  McpState,
   VoiceHealth,
   Artifact,
   Block,
@@ -49,6 +50,10 @@ interface SessionState {
   auth: AuthState | null;
   /** Saída do `claude auth login` em andamento. */
   login: { lines: string[]; urls: string[]; running: boolean; ok?: boolean };
+  /** Servidores MCP: quem está de pé, quem precisa de login, quem barrou uma chamada. */
+  mcp: McpState | null;
+  /** Saída do `claude mcp login <servidor>` em andamento, e de qual servidor. */
+  mcpLogin: { server: string | null; lines: string[]; urls: string[]; running: boolean; ok?: boolean };
   /** Serviços de voz local que estão de pé. */
   voice: VoiceHealth | null;
   conversation: ConversationState;
@@ -60,6 +65,14 @@ interface SessionState {
    * É isto que a Caixa de Texto mostra — conversa fica no painel de Conversa.
    */
   result: { text: string; at: number; artifacts: Artifact[] } | null;
+  /**
+   * Assuntos do Tree que a execução atual reaproveitou.
+   *
+   * Enquanto houver algum, guardar a análise como assunto NOVO cria duplicado —
+   * o que se quer é reescrever aquele. É o que troca o rótulo do botão de
+   * "Guardar" para "Atualizar".
+   */
+  reusedSubjects: { id: string; title: string }[];
   listing: Listing | null;
   /** Resultado da última tentativa de abrir o seletor de pastas do Windows. */
   pick: { at: number; path: string | null; error?: string } | null;
@@ -84,6 +97,15 @@ const patchById = <T extends { id: string }>(list: T[], patch: Partial<T> & { id
 /** Mantém o log enxuto: só as últimas 200 linhas por bloco ficam na memória. */
 const LOG_LIMIT = 200;
 
+/**
+ * Mesmo teto que o servidor aplica em `settleArtifact` (orchestrator.ts).
+ *
+ * Sem ele, uma execução que toca 400 arquivos deixava 400 cartões no painel
+ * enquanto o servidor lembrava de 100 — e o `archives.sync` da próxima conexão
+ * fazia os antigos sumirem sem que evento nenhum tivesse dito que sumiram.
+ */
+const ARCHIVE_LIMIT = 100;
+
 export const useSession = create<SessionState>((set) => ({
   connection: 'connecting',
   connectionDetail: '',
@@ -104,11 +126,14 @@ export const useSession = create<SessionState>((set) => ({
   project: null,
   auth: null,
   login: { lines: [], urls: [], running: false },
+  mcp: null,
+  mcpLogin: { server: null, lines: [], urls: [], running: false },
   voice: null,
-  conversation: { active: false, thinking: false, pending: null },
+  conversation: { active: false, thinking: false, executing: false, pending: null },
   turns: [],
   lastSay: null,
   result: null,
+  reusedSubjects: [],
   listing: null,
   pick: null,
   lastError: null,
@@ -150,8 +175,11 @@ export const useSession = create<SessionState>((set) => ({
           };
 
         case 'workflow.started':
-          // Execução nova zera o resultado anterior: nada de resposta velha na tela.
-          return { workflow: event.workflow, blocks: [], links: [], result: null };
+          // Execução nova zera o resultado anterior: nada de resposta velha na
+          // tela, nem o convite de guardar uma análise que já passou.
+          return {
+            workflow: event.workflow, blocks: [], links: [], result: null, reusedSubjects: [],
+          };
 
         case 'workflow.updated':
           return {
@@ -162,28 +190,33 @@ export const useSession = create<SessionState>((set) => ({
           // O resumo é a última coisa que o agente escreveu; os arquivos vêm
           // dos blocos. Juntos formam o "pronto, ficou assim".
           const artifacts = state.blocks.flatMap((block) => block.artifacts);
+          // Investigação não produz resumo: a resposta dela já saiu pelo
+          // Talking. Herdar o texto anterior aqui mostraria o resultado de uma
+          // execução antiga como se fosse desta leitura.
+          const investigacao = state.workflow?.kind === 'investigation';
+          const encerrou = event.state !== 'cancelled' && !investigacao;
           return {
             workflow: state.workflow
               ? { ...state.workflow, state: event.state, progress: 100 }
               : state.workflow,
             links: [],
-            result:
-              event.state === 'cancelled'
-                ? state.result
-                : {
-                    text: event.summary ?? state.assistant?.text ?? '',
-                    at: Date.now(),
-                    artifacts,
-                  },
+            result: encerrou
+              ? { text: event.summary ?? state.assistant?.text ?? '', at: Date.now(), artifacts }
+              : state.result,
           };
         }
 
         case 'block.upsert': {
           const exists = state.blocks.some((block) => block.id === event.block.id);
+          // O bloco chega do servidor com o log inteiro, e o upsert de
+          // reconexão (syncCatalog) devolvia tudo de volta ao estado — furando
+          // o LOG_LIMIT que o ramo `block.log` respeita e deixando o cartão
+          // renderizar milhares de linhas. Corta na entrada, igual ao outro ramo.
+          const incoming = { ...event.block, logs: event.block.logs.slice(-LOG_LIMIT) };
           return {
             blocks: exists
-              ? state.blocks.map((block) => (block.id === event.block.id ? event.block : block))
-              : [...state.blocks, event.block].sort((a, b) => a.index - b.index),
+              ? state.blocks.map((block) => (block.id === incoming.id ? incoming : block))
+              : [...state.blocks, incoming].sort((a, b) => a.index - b.index),
           };
         }
 
@@ -200,10 +233,18 @@ export const useSession = create<SessionState>((set) => ({
           };
 
         case 'block.artifact':
+          // Mesmo arquivo tocado de novo mantém o mesmo id e volta com a data
+          // nova: substitui em vez de virar um segundo chip idêntico no cartão.
           return {
             blocks: state.blocks.map((block) =>
               block.id === event.blockId
-                ? { ...block, artifacts: [...block.artifacts, event.artifact] }
+                ? {
+                    ...block,
+                    artifacts: [
+                      ...block.artifacts.filter((item) => item.id !== event.artifact.id),
+                      event.artifact,
+                    ],
+                  }
                 : block,
             ),
           };
@@ -226,13 +267,24 @@ export const useSession = create<SessionState>((set) => ({
           return { treeDetail: event.detail };
 
         case 'knowledge.saved':
-          return {};
+          // Gravou: o convite sai da tela. Insistir depois de guardar é como
+          // pedir para guardar de novo o que acabou de ser guardado.
+          return { reusedSubjects: [] };
+
+        case 'knowledge.reused':
+          return { reusedSubjects: event.subjects };
 
         case 'archives.sync':
           return { archives: event.archives };
 
         case 'archive.added':
-          return { archives: [event.archive, ...state.archives] };
+          // Idem: uma linha por arquivo, no topo, com a data do último toque.
+          return {
+            archives: [
+              event.archive,
+              ...state.archives.filter((item) => item.id !== event.archive.id),
+            ].slice(0, ARCHIVE_LIMIT),
+          };
 
         case 'assistant.say':
           return { assistant: { text: event.text, at: Date.now() } };
@@ -273,6 +325,31 @@ export const useSession = create<SessionState>((set) => ({
         case 'auth.login.done':
           return {
             login: { ...state.login, running: false, ok: event.ok, urls: event.urls },
+          };
+
+        case 'mcp.state':
+          return { mcp: event.mcp };
+
+        case 'mcp.login.line':
+          return {
+            mcpLogin: {
+              // Trocar de servidor zera o console: misturar a saída de dois
+              // logins no mesmo painel só confunde quem está lendo o link.
+              ...(state.mcpLogin.server === event.server
+                ? state.mcpLogin
+                : { server: event.server, lines: [], urls: [], running: true, ok: undefined }),
+              server: event.server,
+              running: true,
+              lines: [
+                ...(state.mcpLogin.server === event.server ? state.mcpLogin.lines : []),
+                event.line,
+              ].slice(-80),
+            },
+          };
+
+        case 'mcp.login.done':
+          return {
+            mcpLogin: { ...state.mcpLogin, server: event.server, running: false, ok: event.ok, urls: event.urls },
           };
 
         case 'project.listing':

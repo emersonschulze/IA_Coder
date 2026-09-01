@@ -79,6 +79,9 @@ export async function checkAuth(): Promise<AuthState> {
  * o navegador e precisa de você. O shell que roda por trás dos panos não serve
  * aqui — ele é escondido e não tem para onde mostrar o prompt.
  */
+/** Quanto esperamos por um login de OAuth antes de admitir que ele não vem. */
+export const LOGIN_TIMEOUT_MS = 300_000;
+
 /**
  * Faz o login pelo PowerShell que já está aberto na pasta do projeto.
  *
@@ -87,13 +90,16 @@ export async function checkAuth(): Promise<AuthState> {
  * a interface, então o link aparece no próprio popup, clicável.
  */
 export async function loginViaShell(
-  shell: { run: (command: string) => Promise<{ output: string; exitCode: number }> },
+  shell: { run: (command: string, timeoutMs?: number) => Promise<{ output: string; exitCode: number }> },
   onLine: (line: string) => void,
   listen: (handler: (line: string) => void) => () => void,
 ): Promise<{ ok: boolean; output: string }> {
   const stop = listen(onLine);
   try {
-    const result = await shell.run(`${config.claude.bin} auth login --claudeai`);
+    // Prazo largo porque quem responde é você, no navegador — mas com prazo:
+    // um login abandonado no meio travava a fila do shell e todo comando
+    // seguinte junto, sem nunca devolver `auth.login.done`.
+    const result = await shell.run(`${config.claude.bin} auth login --claudeai`, LOGIN_TIMEOUT_MS);
     return { ok: result.exitCode === 0, output: result.output };
   } finally {
     stop();

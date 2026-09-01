@@ -4,7 +4,14 @@
  */
 
 export type AgentState = 'idle' | 'working' | 'blocked' | 'done' | 'error';
-export type BlockState = 'queued' | 'running' | 'done' | 'error';
+/**
+ * `cancelled` existe porque abortar não é concluir.
+ *
+ * Os blocos que estavam rodando eram marcados como `done` no cancelamento, e a
+ * tela passava a dizer "concluído" para trabalho que foi interrompido no meio —
+ * exatamente a informação que você precisa para saber que aquilo não vale.
+ */
+export type BlockState = 'queued' | 'running' | 'done' | 'error' | 'cancelled';
 export type WorkflowState = 'idle' | 'running' | 'done' | 'failed' | 'cancelled';
 export type LogLevel = 'info' | 'ok' | 'warn' | 'error';
 export type RefKind = 'agent' | 'skill' | 'block' | 'archive';
@@ -30,6 +37,13 @@ export interface Skill {
 export interface Workflow {
   id: string; title: string; state: WorkflowState;
   step: number; totalSteps: number; progress: number; etaSeconds?: number; startedAt?: number;
+  /**
+   * "execution" é o que nasce do seu "pode ir" — ele edita arquivo e roda
+   * comando. "investigation" é o agente lendo o projeto para conseguir te
+   * responder no Talking: aparece igual no centro, porque ler também é
+   * trabalho, mas não gera resumo nem artefato.
+   */
+  kind?: 'execution' | 'investigation';
 }
 export interface LogEntry { ts: number; level: LogLevel; text: string }
 export interface Artifact {
@@ -69,6 +83,15 @@ export interface VoiceHealth {
 export interface ConversationState {
   active: boolean;
   thinking: boolean;
+  /**
+   * Uma execução aprovada está rodando agora.
+   *
+   * Diferente de `thinking`, que é o turno de CONVERSA. Enquanto isto for true a
+   * conversa não é atendida — uma pergunta no meio da execução sequestraria o
+   * turno dela —, e a interface usa o campo para dizer isso antes de a pessoa
+   * digitar.
+   */
+  executing: boolean;
   /** Plano esperando o seu "pode ir". */
   pending: { title: string; steps: string[]; risk: 'low' | 'medium' | 'high' } | null;
 }
@@ -91,8 +114,62 @@ export interface AuthState {
   reason?: 'expired' | 'missing';
 }
 
+/**
+ * Um servidor MCP configurado no Claude Code, e se dá para usar.
+ *
+ * `needs-auth` é falta de credencial e se resolve com login. `connected` com a
+ * ferramenta falhando mesmo assim é OUTRO problema — permissão — e quem conta
+ * isso é `McpState.reachable`.
+ */
+export type McpStatus = 'connected' | 'needs-auth' | 'pending' | 'failed';
+
+export interface McpServer {
+  /** O nome como o CLI mostra, com espaço e pontuação. É o que `mcp login` recebe. */
+  name: string;
+  /** O nome normalizado que vira prefixo das ferramentas: `mcp__<slug>__…`. */
+  slug: string;
+  /** URL, ou a linha de comando, conforme o transporte. */
+  target: string;
+  status: McpStatus;
+  /** O texto cru do CLI, para o caso de um status que não sabemos ler. */
+  label: string;
+}
+
+export interface McpState {
+  servers: McpServer[];
+  checkedAt: number;
+  /** Uma varredura em andamento — a lista na tela ainda é a anterior. */
+  checking: boolean;
+  error?: string;
+  /**
+   * O `--permission-mode` do processo alcança ferramenta de MCP?
+   *
+   * Quando é `false`, TODO servidor conectado ainda falha na hora de usar — e o
+   * aviso na tela precisa falar de permissão, não de login.
+   */
+  reachable: boolean;
+  permissionMode: string;
+  /**
+   * O servidor que acabou de atrapalhar uma resposta. É o que faz o popup abrir
+   * sozinho, em vez de esperar você desconfiar e ir procurar.
+   */
+  blocked?: { server: string; tool: string; reason: 'needs-auth' | 'permission' } | null;
+}
+
 /** Por que o Tree está do jeito que está. */
-export type TreeStatus = 'ok' | 'unreachable' | 'schema-missing' | 'connecting';
+export type TreeStatus =
+  | 'ok'
+  | 'unreachable'
+  /**
+   * Alguém atendeu na porta e derrubou a conexão.
+   *
+   * Não é o banco fora do ar — é o encaminhamento de porta da WSL apontando
+   * para um container que não existe mais. Separado de `unreachable` porque o
+   * conserto é outro: `wsl --shutdown`, não `docker compose up -d`.
+   */
+  | 'relay-broken'
+  | 'schema-missing'
+  | 'connecting';
 
 export type ComponentKind =
   | 'microfrontend' | 'microservice' | 'api' | 'database' | 'cache'
@@ -159,7 +236,15 @@ export type ServerEvent =
   | { type: 'usage'; usage: Usage }
   | { type: 'tree.subjects'; graph: SubjectGraph; status: TreeStatus }
   | { type: 'tree.detail'; detail: SubjectDetail | null }
-  | { type: 'knowledge.saved'; id: string; title: string }
+  | { type: 'knowledge.saved'; id: string; title: string; created: boolean }
+  /**
+   * A execução reaproveitou assuntos do Tree.
+   *
+   * É o que permite a tela oferecer "Atualizar «assunto»" em vez de "Guardar":
+   * se esta análise nasceu em cima de um assunto que já existe, gravá-la como
+   * novo cria um duplicado — e o que a pessoa quer é reescrever aquele.
+   */
+  | { type: 'knowledge.reused'; subjects: { id: string; title: string }[] }
   | { type: 'archives.sync'; archives: Artifact[] }
   | { type: 'archive.added'; archive: Artifact }
   | { type: 'assistant.say'; text: string; speak?: boolean }
@@ -173,6 +258,9 @@ export type ServerEvent =
   | { type: 'conversation.say'; text: string }
   | { type: 'auth.login.line'; line: string }
   | { type: 'auth.login.done'; ok: boolean; urls: string[] }
+  | { type: 'mcp.state'; mcp: McpState }
+  | { type: 'mcp.login.line'; server: string; line: string }
+  | { type: 'mcp.login.done'; server: string; ok: boolean; urls: string[] }
   | { type: 'pong' }
   | { type: 'error'; message: string };
 
@@ -191,9 +279,23 @@ export type ClientCommand =
   | { type: 'conversation.confirm'; accept: boolean }
   | { type: 'auth.check' }
   | { type: 'auth.login'; mode?: 'shell' | 'window' }
+  | { type: 'mcp.check' }
+  | { type: 'mcp.login'; server: string; mode?: 'shell' | 'window' }
+  | { type: 'mcp.dismiss' }
   | { type: 'artifact.open'; path: string; reveal?: boolean }
   | { type: 'tree.list' }
   | { type: 'tree.open'; subjectId: string }
   | { type: 'knowledge.save' }
   | { type: 'knowledge.forget'; subjectId: string }
+  /** Descarta a análise atual sem gravar nada — some o convite de guardar. */
+  | { type: 'knowledge.discard' }
+  /**
+   * Grava um assunto ESCRITO POR VOCÊ, sem passar pelo agente.
+   *
+   * O caminho automático (`knowledge.save`) só existe depois de uma execução
+   * terminar, e pede ao agente que resuma a conversa. Uma análise feita só no
+   * Talking nunca chegava lá — e era justamente a que valia a pena guardar.
+   * Aqui o título e o contexto são seus; nada é inferido.
+   */
+  | { type: 'knowledge.manual'; title: string; summary: string; tags?: string[] }
   | { type: 'ping' };

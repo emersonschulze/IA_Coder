@@ -258,6 +258,111 @@ código do navegador e `setTimeout` passaria a ter duas assinaturas — a do DOM
 (devolve `number`) e a do Node (devolve `NodeJS.Timeout`). Não remova nenhum dos
 dois achando que é sobra. O `npm run typecheck` sempre passou; era só o `build`.
 
+**Ler é trabalho, e trabalho aparece no centro — não na conversa.** Um pedido de
+análise no Talking ficava minutos em "pensando…" sem uma linha de log e terminava
+em "o agente demorou demais para responder". Três causas empilhadas:
+- Durante um turno de conversa o orquestrador ficava **mudo**, para o envelope
+  JSON não virar bloco na tela. Só que isso silenciava também o uso de
+  ferramenta: o agente lia dezenas de arquivos e o centro dizia "workflow vazio".
+  O `muted` binário virou `mode: 'full' | 'investigation' | 'silent'`. Em
+  conversa o modo é `investigation`: bloco, seta e skill acesa aparecem
+  normalmente; só o TEXTO fica de fora. O workflow nasce **preguiçoso**, na
+  primeira ferramenta usada — quem só conversa não merece um workflow vazio
+  piscando no centro. O `Workflow` ganhou `kind`, o cabeçalho mostra
+  "◈ INVESTIGANDO" em vez de "EXECUTANDO", e investigação não vira Result: a
+  resposta dela já saiu pelo Talking, e herdar o texto anterior mostraria o
+  resumo de uma execução velha como se fosse desta leitura.
+- O `ask()` tinha limite de **duração total** (120s). Só que o próprio
+  enquadramento da conversa autoriza o agente a ler e investigar antes de
+  responder — analisar um repositório grande passa disso trabalhando. Virou
+  limite de **ociosidade**: cada ferramenta usada e cada texto escrito zeram o
+  relógio, e o prazo subiu para 4 minutos sem sinal de vida.
+- O pior, invisível: ao estourar o limite, o turno continuava rodando no `claude`
+  e o `once('result')` seguinte podia ser resolvido pela resposta ATRASADA — as
+  respostas trocavam de lugar sem ninguém perceber. Agora a sessão marca `busy`
+  até o resultado atrasado chegar, e um pedido novo nesse meio-tempo recebe
+  "ainda estou terminando o pedido anterior" em vez de uma resposta errada.
+
+**A delegação nunca aparecia porque a ferramenta mudou de nome.** Pedir "use o
+agente orquestrador" acionava o orquestrador de verdade, mas na tela tudo ficava
+creditado ao Claude Code e o cartão dele nunca acendia. Causa: a ferramenta de
+delegação deste Claude Code chama-se **`Agent`**, e o código testava
+`tool.name === 'Task'` (o nome antigo). O sintoma no log era uma linha crua
+"Agent", sem descrição — o `describeTool` também só conhecia `Task`. Agora os
+dois nomes valem (`DELEGATION_TOOLS`), e a delegação virou um estado de verdade
+no orquestrador:
+- O bloco do subagente é dele, e **tudo o que o stream traz durante a delegação
+  vai para lá** — o principal está parado esperando, então o trabalho é do
+  subagente. O principal fica em `blocked` com "Aguardando orquestrador".
+- A skill invocada dentro da delegação (`mapear-codigo`) fica acesa enquanto ela
+  durar, junto com o grupo de ferramenta do momento. Por isso `setSkillInUse`
+  virou `setSkillsInUse`, com várias.
+- O `tool_result` daquela delegação fecha o bloco. Sem isso o cartão ficava
+  "executando" para sempre, mesmo com a tarefa entregue.
+- Cada bloco em execução mostra um relógio correndo. É o que separa "demorado"
+  de "travado" numa delegação de vários minutos.
+
+**Catálogo grande mudou o que é um bom padrão.** Com sete skills escritas à mão,
+lista estável era mais legível e "fixar ativos no topo" vinha desligado. Com 86
+skills reais, o cartão em uso vive fora da vista — e a seta que aponta para ele
+também. Agora vem ligado (`usePrefs`), e mais duas consequências:
+- O FLIP não anima salto maior que 260px. Promover uma skill do fim de uma lista
+  de 86 é um percurso de milhares de pixels: durante a animação o card fica fora
+  do painel, que parece vazio, com a seta apontando para o nada.
+- Só o primeiro card ativo de cada painel puxa a rolagem. Dois disputando
+  deixavam o painel numa posição que não mostrava nenhum dos dois.
+
+E "etapa 3/2" no cabeçalho era garantido: passo e total são o mesmo contador de
+ferramentas, e ainda somava 1. Virou contagem — "5 passos" — que é o que o dado
+realmente é.
+
+**Três agentes em paralelo pedem três cores — e as setas precisam sobreviver.**
+Com a delegação funcionando, virou comum ter principal + dois subagentes na tela
+ao mesmo tempo, e aí apareceram três problemas:
+- **`focusLinks` apagava as setas de todo mundo** a cada ferramenta e reacendia
+  só as do agente da vez. Com três trabalhando, só o último tinha seta e a tela
+  mentia sobre quem estava ativo. Agora cada agente tem seus ids fixos
+  (`lk_<agente>_block` / `_skill`), reativar só atualiza os dele, e
+  `clearLinksOf` apaga apenas os de quem terminou.
+- **A cor da seta é a do agente**, nas duas pontas. E a cor do agente passou a
+  ser distribuída por ÍNDICE, não por hash do nome: hash colide à toa — era o
+  que fazia "arquiteto" nascer idêntico ao "Claude Code", os dois ciano. O ciano
+  saiu da paleta dos instalados: ele é do agente principal.
+- **A seta grampeia na borda do painel.** Um card rolado para fora continua
+  tendo posição — muitas vezes a milhares de pixels fora da janela — e a seta o
+  seguia até lá, atravessando a tela. O `rectOf` agora corta o retângulo pelos
+  limites do `[data-anchor-clip]` (o corpo do painel): a seta encosta na borda
+  enquanto o card está escondido e volta a acompanhá-lo quando ele reaparece,
+  sem nenhum caso especial no desenho.
+
+**"Está demorando" e "travou" são coisas diferentes.** Um bloco podia ficar dez
+minutos em EXECUTANDO com a última linha de log de seis minutos atrás, e a
+narração repetindo "ainda dando uma olhada no projeto" — uma frase que, naquele
+momento, era mentira. Agora:
+- O bloco mostra **"sem sinal há X"** em âmbar quando passa de 45s sem linha
+  nova, no lugar do tempo total. O tempo total responde "faz quanto que
+  começou"; o silêncio responde "ainda está vivo?", que é a pergunta real.
+- A narração admite: passados 90s sem nenhum evento, ela diz há quantos minutos
+  ele não dá sinal e lembra que o abortar existe, em vez de inventar atividade.
+  O `orchestrator.lastEventAt` é quem sustenta as duas coisas.
+
+**A narração ganhou repertório.** Duas frases alternando viram ruído: em três
+minutos você já leu as duas e para de prestar atenção — e aí a mensagem perde a
+única função que tem, que é você saber que ele continua vivo. Agora cada grupo de
+ferramenta tem quatro ou cinco falas, mais duas listas transversais: gracinhas
+(22% dos pulsos) e falas que citam o tempo decorrido (16%, só depois de três
+minutos). Abertura, fecho, erro e recusa também sortearam — eram fixos e apareciam
+igualzinhos em toda execução.
+
+O `sortear` guarda duas memórias, e as duas são necessárias: a última frase dita
+no geral (para não repetir de um pulso para o outro) e a última de **cada lista**
+— sem a segunda, a mesma abertura saía em duas execuções seguidas, porque entre
+elas passou um fecho e a memória global já tinha virado. As falas são curtas de
+propósito: isso é lido em voz alta.
+
+O aviso de silêncio também varia, mas nunca ameniza: quando ele está calado há
+tempo demais, as três versões dizem há quanto tempo e lembram do abortar.
+
 ---
 
 ## Pendências conhecidas
@@ -272,6 +377,10 @@ dois achando que é sobra. O `npm run typecheck` sempre passou; era só o `build
 - [ ] Se o volume do Postgres for antigo, aplicar a migração:
       `docker exec -i ia_coder_postgres psql -U iacoder -d iacoder < db\migrations\001_tree_dois_niveis.sql`
       (o log do servidor avisa: `a tabela "subjects" não existe`).
+- [ ] Em banco que já existia, aplicar também a 002 — ela põe o Tree em escopo
+      de projeto (`UNIQUE (project_path, slug)` e busca filtrada):
+      `docker exec -i ia_coder_postgres psql -U iacoder -d iacoder < db\migrations\002_tree_por_projeto.sql`
+      (o log avisa: `o Tree ainda é global`). Volume novo já nasce assim.
 - [ ] Redis está no compose mas o servidor **ainda não usa** — entra quando
       houver mais de um agente em paralelo (pub/sub e fila).
 - [ ] Embeddings: sem Ollama, o Tree cai para busca por texto (pg_trgm). Para
