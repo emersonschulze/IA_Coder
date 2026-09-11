@@ -69,6 +69,25 @@
   padding: 12px;
   overflow: auto;
 }
+/*
+ * Cada bloco fica na altura que o CONTEÚDO dele pede. As duas barras de rolagem
+ * que faltavam na tela vinham daqui, e eram o mesmo defeito.
+ *
+ * Num container flex em coluna, o filho encolhe por padrão (`flex-shrink: 1`).
+ * Com oito agentes, os oito blocos eram espremidos até caberem na altura
+ * disponível — e como o bloco tem `overflow: hidden`, o log era decepado no
+ * meio da primeira linha. Você via que existia alguma coisa ali embaixo e não
+ * conseguia ler nenhuma.
+ *
+ * E, como tudo "cabia", a lista NUNCA transbordava: o `overflow: auto` acima
+ * não tinha o que rolar, então também não havia como chegar nos blocos já
+ * concluídos lá no fim. Travando o encolhimento, o log de cada bloco volta a
+ * ter os seus 190px (com rolagem própria, veja `.log`) e a lista passa a
+ * transbordar de verdade — que é o que faz a barra aparecer.
+ */
+.blocks > * {
+  flex: 0 0 auto;
+}
 
 /* ---------- bloco do agente ---------- */
 .block {
@@ -213,6 +232,17 @@
   display: inline-flex;
   align-items: center;
   gap: 7px;
+  /*
+   * A pílula não passa da largura do bloco.
+   *
+   * A descrição de uma skill chega com até 90 caracteres, e sem teto a pílula
+   * crescia para fora do cartão — o `overflow: hidden` do bloco cortava o texto
+   * rente à borda, sem reticências e sem jeito de ler o resto. Agora ela para
+   * na borda, termina em "…" e o texto inteiro fica no `title`, a um passar de
+   * mouse. O `min-width: 0` é o que permite o filho encolher dentro do flex;
+   * sem ele o `text-overflow` não tem efeito nenhum.
+   */
+  max-width: 100%;
   margin-top: 10px;
   padding: 4px 9px;
   border: 1px dashed rgba(255, 255, 255, 0.14);
@@ -221,6 +251,15 @@
   font-size: 9.5px;
   letter-spacing: 0.06em;
   color: var(--txt-dim);
+}
+.skillPill > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skillPill > .diamond {
+  flex: 0 0 auto;
 }
 .blockActive .skillPill {
   color: #dff6ff;
@@ -245,8 +284,19 @@
 }
 .log {
   margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
   max-height: 190px;
-  overflow: auto;
+  overflow-y: auto;
+  /*
+   * A rolagem do log morre no log.
+   *
+   * Sem isto, chegar ao fim de um log com a roda do mouse continuava rolando a
+   * LISTA de agentes por baixo — você tentava ler o que um agente fez e a tela
+   * pulava para outro. Com oito blocos abertos, cada um com o seu log, isso
+   * acontece o tempo todo.
+   */
+  overscroll-behavior: contain;
   font-family: var(--mono);
   font-size: 10.5px;
   line-height: 1.75;

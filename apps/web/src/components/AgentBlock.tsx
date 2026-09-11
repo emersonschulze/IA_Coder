@@ -117,6 +117,9 @@ export function AgentBlock({ block, agent, skill, position, onOpenArtifact }: Pr
       */}
       <div
         className={`${styles.skillPill} ${skill && skill.kind !== 'skill' ? styles.skillPillTool : ''}`}
+        // A descrição vem cortada do catálogo para caber no cartão; o texto
+        // inteiro fica a um passar de mouse, sem ocupar linha na tela.
+        title={skill?.kind === 'skill' ? `${skill.name}\n${skill.detail}` : undefined}
       >
         <i className={styles.diamond} />
         <span>

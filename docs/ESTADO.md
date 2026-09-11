@@ -133,6 +133,19 @@ Passando do teto (`INVESTIGACAO_MAXIMA`, em `orchestrator.ts`), o workflow vira
 agente **não** é interrompido: o trabalho é real e matá-lo jogaria fora tudo o
 que ele já leu. O que muda é a tela parar de chamar aquilo de investigação.
 
+**Os blocos do centro não encolhem (`.blocks > * { flex: 0 0 auto }`).** Parece
+detalhe de CSS e não é: era o que impedia você de ler o que os agentes estavam
+fazendo. Num container flex em coluna o filho encolhe por padrão, então com oito
+agentes os oito blocos eram espremidos até caberem na altura da tela — medido,
+um bloco de 80px com um log de 165px dentro — e, como o bloco tem
+`overflow: hidden`, o log era decepado no meio da primeira linha. Pior: como
+tudo "cabia", a lista nunca transbordava, o `overflow: auto` dela não tinha o
+que rolar e não havia como chegar nos blocos já concluídos. Travar o
+encolhimento resolve as duas barras de uma vez (depois: bloco de 285px, lista
+com 652px visíveis de 1911). O log tem rolagem própria (190px) com
+`overscroll-behavior: contain`, senão chegar ao fim de um log continuava rolando
+a lista por baixo e a tela pulava para outro agente.
+
 **O pedido de execução convoca os especialistas do catálogo.** Nada os
 convocava: o prompt dizia "pode editar arquivos e rodar comandos" e o agente
 principal fazia tudo sozinho no terminal — uma ferramenta feita para mostrar

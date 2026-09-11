@@ -502,7 +502,6 @@ export class Orchestrator {
     if (invoked) this.reigning.set(agentId, invoked);
     const emCurso = this.reigning.get(agentId) ?? skillId;
     this.setAgentState(agentId, 'working', this.guessProgress(), emCurso);
-    this.announceSkill(agentId, block.id, emCurso);
 
     if (delegou) {
       // Delegar é ação de QUEM delega: a linha fica no bloco do principal, que
@@ -517,6 +516,18 @@ export class Orchestrator {
         action: truncate(String(tool.input.description ?? 'Assumindo a tarefa'), 70),
         state: 'running',
       });
+      /*
+       * A TAREFA que o subagente recebeu, na primeira linha do log dele.
+       *
+       * O cabeçalho só comporta o resumo de 70 caracteres ("Extract creation
+       * business rules"), e era tudo o que existia: dava para ver que ele estava
+       * ocupado e não com o quê. O briefing inteiro é o que responde isso — é
+       * onde estão o arquivo que ele deve ler, a skill que deve usar e o
+       * recorte do trabalho. Sem ele, "o que essa skill está fazendo" só dava
+       * para inferir pelos comandos que vinham depois.
+       */
+      const briefing = typeof tool.input.prompt === 'string' ? tool.input.prompt.trim() : '';
+      if (briefing) this.log(block.id, 'info', `✦ tarefa: ${truncate(briefing.replace(/\s+/g, ' '), 500)}`);
     }
 
     /*
@@ -528,6 +539,10 @@ export class Orchestrator {
      * quando não há skill nenhuma regendo aquele agente, que é quando ele é, de
      * fato, a melhor resposta para "o que está sendo feito".
      */
+    // Depois da delegação de propósito: no bloco do subagente, a tarefa que ele
+    // recebeu vem primeiro e a skill que vai cumpri-la vem em seguida. Na ordem
+    // inversa o log abria anunciando uma skill antes de dizer para quê.
+    this.announceSkill(agentId, block.id, emCurso);
     this.setSkillsInUse(this.litSkills(emCurso));
     this.currentAction = action;
     this.currentSkill = skillForTool(tool.name);
