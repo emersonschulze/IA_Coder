@@ -57,11 +57,30 @@ plugin, `projeto` ou `pessoal`.
 
 | `kind` | o que é | exemplo |
 |---|---|---|
-| `tool` | grupo de ferramenta do próprio Claude Code; é o que acende a cada passo | `read`, `edit`, `shell` |
-| `skill` | skill instalada de verdade, achada em disco | `auditar-cnpj`, `figma-use` |
+| `tool` | grupo de ferramenta do próprio Claude Code — o **como** | `read`, `edit`, `shell`, `mcp` |
+| `skill` | habilidade de verdade — o **quê** | `auditar-cnpj`, `figma-use` |
 
 Como plugin de escopo `project` só vale na pasta onde foi instalado, **o catálogo muda
 quando o projeto muda** — o servidor revarre e reemite os dois eventos a cada troca.
+
+`skills.sync` também é **reemitido durante a execução** quando uma skill é invocada sem
+estar no disco varrido (as embutidas no Claude Code, um plugin instalado depois do boot).
+Ela entra na lista com `source: "invocada"`. A alternativa era acender "Outras" com o
+nome da skill na mão, que é a tela sabendo e não contando.
+
+> **Qual skill acende.** Não é a da ferramenta desta chamada: é a que está **regendo**
+> aquele agente. Uma skill começa a reger quando ele a invoca (`Skill`), quando é nomeada
+> no prompt da delegação, ou quando ele abre o `SKILL.md` dela — e continua regendo
+> enquanto ele lê, escreve e roda comando para cumpri-la. O grupo de ferramenta só acende
+> quando não há skill nenhuma regendo, porque aí ele é a melhor resposta disponível para
+> "o que está sendo feito". Cair para `shell` no primeiro comando seria trocar o QUÊ pelo
+> COMO — era o que fazia a tela inteira parecer um terminal.
+
+> **Identidade do subagente.** Um tipo de agente nomeado (`dev-system`) é sempre o mesmo
+> cartão. Os tipos genéricos do Claude Code (`general-purpose`, `Explore`, `fork`…) ganham
+> **um cartão por delegação**, com id `sub:<tipo>#<toolUseId>` e batizado pela tarefa que
+> receberam — quatro `general-purpose` disparados na mesma leva são quatro trabalhadores,
+> não um. Esses cartões são de uso único e somem no começo do workflow seguinte.
 
 > Regra de UI: fora de execução a tela exibe **todos** os agentes e skills em brilho pleno.
 > O escurecimento só acontece enquanto há agente com `state: 'working'`.

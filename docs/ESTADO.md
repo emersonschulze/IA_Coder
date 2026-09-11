@@ -1,7 +1,7 @@
 # Estado do projeto — retomada
 
 > Escrito para você voltar depois de reiniciar a máquina (ou em outra sessão)
-> sem precisar reconstruir contexto. Última atualização: 31/08/2026.
+> sem precisar reconstruir contexto. Última atualização: 11/09/2026.
 
 ## Em uma frase
 
@@ -403,6 +403,43 @@ Node.js instalado à parte.** `apps/desktop/main.cjs` sobe
 `apps/server/src/index.ts` via `tsx`, chamando o próprio executável do Electron
 com a variável `ELECTRON_RUN_AS_NODE=1` — é assim que o Electron vira "só o
 Node" para um processo filho. Menos uma coisa para pedir para instalar.
+
+**A tela mostra a SKILL que rege o agente, não a ferramenta da chamada.** No
+ensaio isso parecia resolvido; num projeto real a tela virava um terminal —
+quatro especialistas com quatro skills diferentes apareciam como um cartão só
+chamado "General Purpose", com a ação escrita "PowerShell" e a skill "Outras".
+Eram cinco causas somadas, e vale saber quais para não reintroduzir nenhuma:
+
+1. **`PowerShell` não estava no mapa de ferramentas.** É o shell do Claude Code
+   no Windows, irmão de primeira classe do `Bash`, e respondia por quase toda
+   chamada desta máquina. Fora do mapa, caía em "Outras"; e como o
+   `describeTool` também não o conhecia, o cabeçalho do bloco exibia a palavra
+   `PowerShell` crua. Era literalmente isso que se via o tempo todo.
+2. **`general-purpose` fundia os subagentes.** O id era `sub:<tipo>`, e os tipos
+   genéricos do Claude Code são a maioria das delegações reais (90 de 147 num
+   histórico desta máquina). Quatro delegações na mesma leva viravam um cartão,
+   um bloco e uma skill: a do último a aparecer no stream. Hoje o genérico ganha
+   um cartão por delegação (`sub:<tipo>#<toolUseId>`), batizado pela tarefa.
+3. **A skill nomeada no prompt da delegação era invisível.** É o caminho mais
+   comum em frameworks de agentes — o orquestrador manda "leia
+   `agents/dev-system/AGENT.md` e use a skill `criar-system-api`" — e o
+   subagente executa sem nunca abrir o `SKILL.md` nem chamar a ferramenta
+   `Skill`. Agora o prompt do `Task` é lido (`skillFromMention`), com casamento
+   conservador: nome com hífen casa solto, nome de uma palavra só exige
+   marcação explícita, e nunca se olha a SAÍDA de ferramenta.
+4. **Skill invocada fora do disco virava "Outras".** As skills embutidas no
+   Claude Code não moram em `skills/<nome>/SKILL.md` de plugin nenhum. A tela
+   via a chamada, sabia o nome, e mostrava a caixa de sobras. Hoje nasce um
+   cartão na hora, com `source: "invocada"`.
+5. **A seta apontava para o grupo de ferramenta** enquanto o cartão acendia a
+   skill — as duas metades da tela discordando, e a seta, que é o que o olho
+   segue, apontando para o lado errado.
+
+A regra que amarra tudo: a skill **rege** o agente até ser trocada, e o grupo de
+ferramenta só acende quando não há skill nenhuma regendo. A troca de skill entra
+no log do bloco como marco (`▸ skill <nome> — <o que ela faz>`), que é o que
+separa o trabalho de uma skill do da seguinte. A voz segue a mesma regra: havendo
+skill em curso, ela é anunciada pelo nome em vez de "o terminal está trabalhando".
 
 ---
 

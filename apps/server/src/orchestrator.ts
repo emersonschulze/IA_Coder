@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto';
 import type { ClaudeSession, RateLimit, ToolResult, ToolUse, TurnResult } from './claude.js';
 import {
   MAIN_AGENT, SKILLS, artifactFromTool, bareName, describeTool, installedAgent, installedSkill,
-  folderOf, isDelegation, normalizeDir, skillCardForTool, skillForTool, skillFromPath,
-  skillFromText, subAgent, truncate,
+  folderOf, invokedSkill, isDelegation, isGenericAgent, normalizeDir, skillCardForTool,
+  skillForTool, skillFromMention, skillFromPath, skillFromText, skillInvoked, subAgent, truncate,
 } from './catalog.js';
 import type { DiscoveredCatalog } from './discovery.js';
 import type {
@@ -136,6 +136,19 @@ export class Orchestrator {
    */
   private reigning = new Map<string, string>();
 
+  /** A última skill JÁ ANUNCIADA no log de cada agente. Veja `announceSkill`. */
+  private announced = new Map<string, string>();
+
+  /**
+   * Os agentes que nasceram DESTA execução e morrem com ela.
+   *
+   * Um `general-purpose` ganha um cartão por delegação (veja `GENERIC_AGENTS`),
+   * batizado com a tarefa que recebeu. São cartões de uso único: sem varrê-los
+   * no começo do workflow seguinte, o painel Agents ia acumulando o histórico de
+   * toda tarefa já delegada na sessão.
+   */
+  private ephemeral = new Set<string>();
+
   /** Último texto que o agente escreveu — vira o resumo falado no fim. */
   private lastText = '';
   /**
@@ -173,6 +186,16 @@ export class Orchestrator {
    * recitar o comando, que é log de terminal e não conversa.
    */
   currentSkill = '';
+  /**
+   * O NOME da skill que rege o trabalho agora — vazio quando não há nenhuma.
+   *
+   * Existe separado de `currentSkill` porque responde outra pergunta. Aquele diz
+   * o meio ("shell"); este diz a habilidade ("criar-system-api"). Quando há uma
+   * skill regendo, é ela que a voz deve anunciar: ouvir "o terminal está
+   * trabalhando" enquanto o agente executa uma skill de 11 passos é a mesma
+   * troca do QUE pelo COMO que estragava o painel.
+   */
+  currentSkillName = '';
 
   constructor(
     private readonly emit: Emit,
@@ -324,7 +347,9 @@ export class Orchestrator {
     this.toolCount = 0;
     this.delegations.clear();
     this.reigning.clear();
+    this.announced.clear();
     this.pendingArtifacts.clear();
+    this.dropEphemeralAgents();
     // O resumo falado do turno anterior não pode sobreviver a este: uma execução
     // que termina sem escrever texto nenhum herdava a última frase da execução
     // PASSADA, e a voz anunciava um trabalho que não foi feito agora.
@@ -410,33 +435,29 @@ export class Orchestrator {
      */
     const owner = tool.parentToolUseId ? this.delegations.get(tool.parentToolUseId) : undefined;
     const agentId = delegou
-      ? this.agentForDelegation(String(tool.input.subagent_type ?? 'agente'))
+      ? this.agentForDelegation(tool)
       : owner?.agentId ?? 'claude';
 
-    /*
-     * A skill de verdade, quando existe uma, é mais informativa do que o grupo
-     * de ferramentas — é ela que ganha a seta e o brilho.
-     *
-     * Dois caminhos, porque há dois jeitos de usar uma skill nesta máquina:
-     * chamar a ferramenta `Skill`, e ABRIR o `SKILL.md` dela. O segundo não é
-     * gambiarra: é o que o `AGENT.md` de vários agentes de terceiros manda
-     * fazer ("antes de usar uma skill, leia o arquivo correspondente").
-     * Enquanto só o primeiro contava, o painel jurava que nenhum agente usava
-     * skill nenhuma.
-     */
-    const invoked = tool.name === 'Skill'
-      ? this.installedSkills.get(bareName(String(tool.input.skill ?? tool.input.name ?? '')))
-      : this.skillBeingUsed(tool);
+    const invoked = this.skillOf(tool);
     const skillId = invoked ?? skillCardForTool(tool.name);
     const block = this.blockFor(agentId);
     const action = describeTool(tool.name, tool.input);
 
     this.toolCount += 1;
-    // Descobriu uma skill nova? Ela passa a reger este agente daqui em diante,
-    // substituindo a anterior — é assim que a troca de skill aparece na tela.
+    /*
+     * Descobriu uma skill nova? Ela passa a reger este agente daqui em diante,
+     * substituindo a anterior — é assim que a troca de skill aparece na tela.
+     *
+     * Numa DELEGAÇÃO quem recebe a skill é o subagente, não quem delegou: o
+     * prompt do `Task` é onde o especialista é nomeado ("use a skill
+     * criar-system-api"), e é ele quem vai executá-la. Creditar ao principal
+     * punha a skill do subagente no cartão errado e deixava o dono dela com
+     * "sem skill no momento" durante a tarefa inteira.
+     */
     if (invoked) this.reigning.set(agentId, invoked);
     const emCurso = this.reigning.get(agentId) ?? skillId;
     this.setAgentState(agentId, 'working', this.guessProgress(), emCurso);
+    this.announceSkill(agentId, block.id, emCurso);
 
     if (delegou) {
       // Delegar é ação de QUEM delega: a linha fica no bloco do principal, que
@@ -465,6 +486,7 @@ export class Orchestrator {
     this.setSkillsInUse(this.litSkills(emCurso));
     this.currentAction = action;
     this.currentSkill = skillForTool(tool.name);
+    this.currentSkillName = this.skillNameOf(emCurso);
     if (!delegou) {
       this.patchBlock(block.id, {
         action, skillId: emCurso, state: 'running', progress: this.guessProgress(),
@@ -475,7 +497,16 @@ export class Orchestrator {
     // para si mesmo no próprio log — a primeira linha do cartão dele era um
     // evento que ele não viveu.
     if (!delegou) this.log(block.id, 'info', action);
-    this.focusLinks(agentId, block.id, skillId, tool.name);
+    /*
+     * A seta aponta para a skill EM CURSO, igual ao cartão aceso.
+     *
+     * Ela apontava para `skillId` — o grupo da ferramenta desta chamada. Com um
+     * agente executando `criar-system-api` via terminal, o painel acendia a
+     * skill e a seta ia para "Shell": as duas metades da tela discordando sobre
+     * o que estava acontecendo, e a seta, que é o que o olho segue, apontando
+     * para o lado errado.
+     */
+    this.focusLinks(agentId, block.id, emCurso, tool.name);
 
     const artifact = artifactFromTool(tool.name, tool.input);
     if (artifact) {
@@ -502,18 +533,38 @@ export class Orchestrator {
   }
 
   /**
-   * Ele está abrindo o `SKILL.md` de alguma skill instalada?
+   * Que skill esta chamada põe em uso — se é que põe alguma.
    *
-   * É o sinal mais forte de skill em uso nesta máquina, porque é literalmente o
-   * que o `AGENT.md` de agentes de terceiros costuma mandar fazer: "antes de
-   * usar uma skill, leia o arquivo correspondente".
+   * São QUATRO jeitos de usar uma skill nesta máquina, e a tela precisa dos
+   * quatro. Enquanto só o primeiro contava, o painel jurava que nenhum agente
+   * usava skill nenhuma e mostrava o grupo de ferramenta no lugar:
    *
-   * Dois jeitos de ler, e os dois contam. Olhar só o `file_path` da ferramenta
-   * `Read` deixava passar o caso mais comum na prática — `cat ".../SKILL.md"`
-   * pelo Bash —, e aí o painel mostrava "Shell" no lugar da skill: a ferramenta
-   * do sistema roubando o crédito do trabalho.
+   * 1. **Chamar a ferramenta `Skill`.** O caminho oficial — e mesmo aqui a
+   *    skill sumia quando o nome não estava no disco varrido; veja
+   *    `resolveSkill`.
+   * 2. **Ser NOMEADO na delegação.** O orquestrador de vários frameworks passa
+   *    a especialidade dentro do prompt do `Task`, e o subagente executa a skill
+   *    sem nunca abrir arquivo nem chamar ferramenta. Era o caso mais comum
+   *    desta máquina e o mais invisível de todos.
+   * 3. **Abrir o `SKILL.md`.** O que o `AGENT.md` de agentes de terceiros
+   *    costuma mandar fazer: "antes de usar uma skill, leia o arquivo
+   *    correspondente".
+   * 4. **Abrir o `SKILL.md` pelo terminal** (`cat ".../SKILL.md"`). Olhar só o
+   *    `file_path` do `Read` deixava passar justamente este, e aí o painel
+   *    mostrava "Shell" — a ferramenta do sistema roubando o crédito do
+   *    trabalho.
    */
-  private skillBeingUsed(tool: ToolUse): string | undefined {
+  private skillOf(tool: ToolUse): string | undefined {
+    const invocada = skillInvoked(tool.name, tool.input);
+    if (invocada) return this.resolveSkill(invocada);
+
+    if (isDelegation(tool.name)) {
+      const briefing = [tool.input.prompt, tool.input.description]
+        .filter((part): part is string => typeof part === 'string')
+        .join('\n');
+      return skillFromMention(briefing, this.installedSkills) ?? undefined;
+    }
+
     if (this.skillFolders.size === 0) return undefined;
 
     if (tool.name === 'Read' || tool.name === 'NotebookRead') {
@@ -535,6 +586,50 @@ export class Orchestrator {
     return undefined;
   }
 
+  /**
+   * O cartão de uma skill invocada pelo nome — criando um se ela não existe.
+   *
+   * Uma invocação é uma declaração: ele DISSE que está usando `artifact-design`.
+   * Se esse nome não veio da varredura do disco — e não vem, para tudo o que é
+   * embutido no Claude Code ou instalado depois do boot —, a resposta certa não
+   * é cair para "Outras" com o nome na mão. É registrar o cartão agora e acendê-lo.
+   */
+  private resolveSkill(reference: string): string {
+    const conhecida = this.installedSkills.get(bareName(reference));
+    if (conhecida) return conhecida;
+
+    const nova = invokedSkill(reference);
+    if (!this.skills.some((skill) => skill.id === nova.id)) {
+      this.skills.push(nova);
+      this.emit({ type: 'skills.sync', skills: this.skills });
+    }
+    this.installedSkills.set(bareName(reference), nova.id);
+    return nova.id;
+  }
+
+  /**
+   * Registra no log do bloco a TROCA de skill — uma linha, quando muda.
+   *
+   * É o que responde "o que aquela skill está fazendo" ao longo do tempo: a
+   * linha marca onde uma skill começou a reger, e as linhas seguintes até a
+   * próxima troca são o trabalho dela. Sem esse marco, o log é uma lista de
+   * comandos sem dono, e não dá para dizer onde a `planejar-e2e` terminou e a
+   * `criar-teste-e2e` começou.
+   */
+  private announceSkill(agentId: string, blockId: string, skillId: string | null): void {
+    if (!skillId || this.announced.get(agentId) === skillId) return;
+    this.announced.set(agentId, skillId);
+    const skill = this.skills.find((item) => item.id === skillId);
+    if (!skill || skill.kind !== 'skill') return;
+    this.log(blockId, 'ok', truncate(`▸ skill ${skill.name} — ${skill.detail}`, 160));
+  }
+
+  /** O nome de exibição de uma skill de verdade; vazio para grupo de ferramenta. */
+  private skillNameOf(skillId: string | null): string {
+    const skill = skillId ? this.skills.find((item) => item.id === skillId) : undefined;
+    return skill?.kind === 'skill' ? skill.name : '';
+  }
+
   private onToolResult(result: ToolResult): void {
     if (this.mode === 'silent') return;
     this.lastEventAt = Date.now();
@@ -552,6 +647,7 @@ export class Orchestrator {
       this.patchBlock(blockId, { state: result.isError ? 'error' : 'done', progress: 100 });
       this.setAgentState(agentId, result.isError ? 'error' : 'done', 100, null);
       this.reigning.delete(agentId);
+      this.announced.delete(agentId);
       // Entregou: a skill dele APAGA agora, não na próxima ferramenta que
       // alguém usar. Sem isto ela ficava acesa depois do agente ter ido embora,
       // e o painel mostrava trabalho que não estava mais acontecendo.
@@ -641,11 +737,21 @@ export class Orchestrator {
     this.emit({ type: 'usage', usage: this.usage });
   }
 
+  /** Os cartões de uso único da execução passada saem de cena. Veja `ephemeral`. */
+  private dropEphemeralAgents(): void {
+    if (this.ephemeral.size === 0) return;
+    this.agents = this.agents.filter((agent) => !this.ephemeral.has(agent.id));
+    this.ephemeral.clear();
+    this.emit({ type: 'agents.sync', agents: this.agents });
+  }
+
   private finish(state: 'done' | 'failed' | 'cancelled', summary?: string): void {
     this.delegations.clear();
     this.reigning.clear();
+    this.announced.clear();
     this.currentAction = '';
     this.currentSkill = '';
+    this.currentSkillName = '';
     this.clearLinks();
     this.skills.forEach((skill) => {
       if (skill.inUse) {
@@ -684,6 +790,7 @@ export class Orchestrator {
     this.emit({ type: 'workflow.finished', id: encerrado.id, state, summary });
     this.currentAction = '';
     this.currentSkill = '';
+    this.currentSkillName = '';
     // Quem lê o resumo em voz alta é a execução. A investigação já responde
     // pelo Talking — narrar de novo seria o agente falando duas vezes.
     if (!investigacao) this.hooks.onFinish?.(state, this.lastText);
@@ -816,17 +923,30 @@ export class Orchestrator {
    * Se o agente já está no catálogo (veio de um plugin ou do `.claude`), quem
    * acende é o cartão dele — nada de criar um segundo cartão com o mesmo nome.
    * Só o que não conhecemos vira subagente novo na tela.
+   *
+   * O tipo GENÉRICO é a exceção, e é a que mais aparece: `general-purpose` não é
+   * um agente, é um executor anônimo que recebe a especialidade pelo prompt.
+   * Dois deles não são a mesma pessoa fazendo duas coisas — são duas pessoas. Um
+   * cartão por delegação, portanto, batizado com a tarefa que cada um recebeu.
+   * Veja `GENERIC_AGENTS`.
    */
-  private agentForDelegation(kind: string): string {
-    return this.installedAgents.get(bareName(kind)) ?? this.ensureSubAgent(kind).id;
+  private agentForDelegation(tool: ToolUse): string {
+    const kind = String(tool.input.subagent_type ?? 'agente');
+    const instalado = this.installedAgents.get(bareName(kind));
+    if (instalado) return instalado;
+
+    const id = isGenericAgent(kind) ? `sub:${bareName(kind)}#${tool.id}` : `sub:${bareName(kind)}`;
+    const tarefa = typeof tool.input.description === 'string' ? tool.input.description : undefined;
+    return this.ensureSubAgent(id, kind, isGenericAgent(kind) ? tarefa : undefined).id;
   }
 
-  private ensureSubAgent(kind: string): Agent {
-    const id = `sub:${kind}`;
+  private ensureSubAgent(id: string, kind: string, label?: string): Agent {
     const existing = this.agents.find((agent) => agent.id === id);
     if (existing) return existing;
-    const agent = subAgent(kind, this.agents.length - 1);
+    const agent = subAgent(id, kind, this.agents.length - 1, label);
     this.agents.push(agent);
+    // Nasceu para esta execução: some no começo da próxima. Veja `ephemeral`.
+    if (id.includes('#')) this.ephemeral.add(id);
     this.emit({ type: 'agents.sync', agents: this.agents });
     return agent;
   }

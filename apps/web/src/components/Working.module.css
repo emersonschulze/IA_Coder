@@ -227,6 +227,16 @@
   border-color: color-mix(in srgb, var(--c) 55%, transparent);
   background: color-mix(in srgb, var(--c) 10%, transparent);
 }
+/*
+ * Grupo de ferramenta não é skill, e o destaque também tem de dizer isso: ele
+ * fica discreto mesmo com o bloco aceso. Quando a habilidade sobe ao palco, o
+ * contraste entre as duas pílulas é o que faz a diferença ser vista sem ler.
+ */
+.blockActive .skillPillTool {
+  color: var(--txt-dim);
+  border-color: rgba(255, 255, 255, 0.14);
+  background: none;
+}
 .diamond {
   width: 5px;
   height: 5px;
