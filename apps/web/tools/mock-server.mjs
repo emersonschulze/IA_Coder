@@ -23,13 +23,23 @@ const AGENTS = [
   { id: 'ops', name: 'DevOps', role: 'BUILD · PIPELINE', initials: 'OP', color: '#fbbf24', state: 'idle' },
 ];
 
+/*
+ * As duas naturezas da lista, iguais às do servidor de verdade: `tool` é grupo
+ * de ferramenta do Claude Code (o COMO) e `skill` é habilidade (o QUÊ). O ensaio
+ * precisa das duas, e com o `kind` certo — é por ele que a tela decide se a
+ * pílula do bloco diz "skill: …" ou "ferramenta: …".
+ */
 const SKILLS = [
-  { id: 'csharp', name: 'C#', detail: '.NET 8 · MINIMAL API', initials: 'C#', color: '#22d3ee', inUse: false },
-  { id: 'react', name: 'React', detail: 'VITE · TS · TAILWIND', initials: 'RE', color: '#a855f7', inUse: false },
-  { id: 'sql', name: 'SQL Server', detail: 'MIGRATIONS · INDEX', initials: 'SQ', color: '#38bdf8', inUse: false },
-  { id: 'test', name: 'xUnit', detail: 'UNIT · INTEGRAÇÃO', initials: 'XU', color: '#34d399', inUse: false },
-  { id: 'docker', name: 'Docker', detail: 'COMPOSE · CI', initials: 'DK', color: '#fbbf24', inUse: false },
+  { id: 'read', name: 'Leitura', detail: 'READ · GLOB · GREP', initials: 'RD', color: '#38bdf8', inUse: false, kind: 'tool' },
+  { id: 'shell', name: 'Shell', detail: 'BASH · POWERSHELL', initials: 'SH', color: '#fbbf24', inUse: false, kind: 'tool' },
+  { id: 'csharp', name: 'criar-system-api', detail: 'Cria a API .NET 8 do zero, com banco próprio e auditoria', initials: 'CS', color: '#22d3ee', inUse: false, kind: 'skill' },
+  { id: 'react', name: 'criar-componente-react', detail: 'Componente e store ligados ao endpoint, com rota publicada', initials: 'CR', color: '#a855f7', inUse: false, kind: 'skill' },
+  { id: 'sql', name: 'migrar-banco', detail: 'Migration versionada e índices, sem alteração destrutiva', initials: 'MB', color: '#38bdf8', inUse: false, kind: 'skill' },
+  { id: 'test', name: 'criar-testes-unitarios', detail: 'Suíte xUnit a partir do contrato, com cobertura mínima', initials: 'CT', color: '#34d399', inUse: false, kind: 'skill' },
+  { id: 'docker', name: 'conformar-pipeline', detail: 'Imagem e pipeline de entrega, do build ao registry', initials: 'CP', color: '#fbbf24', inUse: false, kind: 'skill' },
 ];
+
+const nomeDaSkill = (id) => SKILLS.find((skill) => skill.id === id)?.name ?? id;
 
 const SCRIPT = [
   { agent: 'be1', skill: 'csharp', action: 'Modelando entidades do domínio',
@@ -121,6 +131,13 @@ wss.on('connection', (socket) => {
       send({ type: 'link.activated', link: { id: `lk_${index}_s`, from: { kind: 'agent', id: step.agent }, to: { kind: 'skill', id: step.skill }, label: 'usa' } });
 
       if (index === 0) agentSays(`Fechado, começando agora: ${step.action.toLowerCase()}.`);
+
+      // A troca de skill entra no log como marco, igual ao servidor real: é o
+      // que separa o trabalho de uma skill do da seguinte dentro do mesmo bloco.
+      send({ type: 'block.log', blockId, entry: {
+        ts: Date.now(), level: 'ok',
+        text: `▸ skill ${nomeDaSkill(step.skill)} — ${SKILLS.find((s) => s.id === step.skill)?.detail ?? ''}`,
+      }});
 
       for (const [k, text] of step.logs.entries()) {
         await sleep(700);

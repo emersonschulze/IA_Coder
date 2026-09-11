@@ -1,7 +1,7 @@
 # Estado do projeto — retomada
 
 > Escrito para você voltar depois de reiniciar a máquina (ou em outra sessão)
-> sem precisar reconstruir contexto. Última atualização: 31/08/2026.
+> sem precisar reconstruir contexto. Última atualização: 11/09/2026.
 
 ## Em uma frase
 
@@ -109,6 +109,50 @@ nome de um jeito um pouco diferente. O tempo está em `SILENCE_MS`, em
 
 **Nada é executado durante a conversa.** O agente lê e investiga à vontade, mas
 editar arquivo só depois do seu "pode mandar" — que vira um workflow comum.
+
+**A confirmação do plano tem duas instâncias, e a expressão regular é só a
+primeira.** `soundsLikeYes` é um atalho de custo zero; o que ela não reconhece
+vai para o MODELO decidir, no próprio turno de conversa (`decisionFrame`, em
+`conversation.ts`), que responde `go` ou `stop`. Existir uma segunda instância
+não é luxo: enquanto havia só a lista de verbos, **"pode seguir" não casava com
+nenhum deles** — a confirmação virava pergunta nova, o agente encontrava o plano
+no contexto e saía CUMPRINDO-O do jeito que o modo conversa permite, lendo. Dava
+um turno de dezenas de ferramentas, minutos de token, tudo rotulado
+"INVESTIGANDO", sem narração, sem delegar para ninguém, e com o texto final
+descartado no fim — porque turno de conversa não escreve na tela. A execução de
+verdade nunca começava. A lista continua sendo uma lista de verbos (e não
+`pode \w+`) de propósito: um "pode explicar melhor?" lido como sim dispararia
+uma execução que ninguém aprovou, e errar para esse lado é caro. Negação ganha
+de aprovação na mesma frase, pelo mesmo motivo.
+
+**Turno de conversa tem teto: passou de 20 ferramentas, deixa de ser
+investigação.** O rótulo não é cosmético — em modo investigação a tela não narra,
+não guarda o texto final e mostra "INVESTIGANDO" enquanto o agente queima token.
+Passando do teto (`INVESTIGACAO_MAXIMA`, em `orchestrator.ts`), o workflow vira
+`execution` na tela, a narração acorda e o Abortar passa a fazer sentido. O
+agente **não** é interrompido: o trabalho é real e matá-lo jogaria fora tudo o
+que ele já leu. O que muda é a tela parar de chamar aquilo de investigação.
+
+**Os blocos do centro não encolhem (`.blocks > * { flex: 0 0 auto }`).** Parece
+detalhe de CSS e não é: era o que impedia você de ler o que os agentes estavam
+fazendo. Num container flex em coluna o filho encolhe por padrão, então com oito
+agentes os oito blocos eram espremidos até caberem na altura da tela — medido,
+um bloco de 80px com um log de 165px dentro — e, como o bloco tem
+`overflow: hidden`, o log era decepado no meio da primeira linha. Pior: como
+tudo "cabia", a lista nunca transbordava, o `overflow: auto` dela não tinha o
+que rolar e não havia como chegar nos blocos já concluídos. Travar o
+encolhimento resolve as duas barras de uma vez (depois: bloco de 285px, lista
+com 652px visíveis de 1911). O log tem rolagem própria (190px) com
+`overscroll-behavior: contain`, senão chegar ao fim de um log continuava rolando
+a lista por baixo e a tela pulava para outro agente.
+
+**O pedido de execução convoca os especialistas do catálogo.** Nada os
+convocava: o prompt dizia "pode editar arquivos e rodar comandos" e o agente
+principal fazia tudo sozinho no terminal — uma ferramenta feita para mostrar
+vários especialistas em paralelo passava a execução inteira com um bloco só na
+tela. Os nomes vêm do `discovery.ts`, do projeto aberto, **nunca de uma lista
+escrita no código**; sem agentes instalados, a linha simplesmente não existe. É
+convite, não ordem: quem decide se a tarefa se divide continua sendo o agente.
 
 **O `DATABASE_URL` é derivado do compose.** O servidor monta o endereço a partir
 de `POSTGRES_USER/PASSWORD/DB/PORT`. Uma fonte da verdade só.
@@ -403,6 +447,43 @@ Node.js instalado à parte.** `apps/desktop/main.cjs` sobe
 `apps/server/src/index.ts` via `tsx`, chamando o próprio executável do Electron
 com a variável `ELECTRON_RUN_AS_NODE=1` — é assim que o Electron vira "só o
 Node" para um processo filho. Menos uma coisa para pedir para instalar.
+
+**A tela mostra a SKILL que rege o agente, não a ferramenta da chamada.** No
+ensaio isso parecia resolvido; num projeto real a tela virava um terminal —
+quatro especialistas com quatro skills diferentes apareciam como um cartão só
+chamado "General Purpose", com a ação escrita "PowerShell" e a skill "Outras".
+Eram cinco causas somadas, e vale saber quais para não reintroduzir nenhuma:
+
+1. **`PowerShell` não estava no mapa de ferramentas.** É o shell do Claude Code
+   no Windows, irmão de primeira classe do `Bash`, e respondia por quase toda
+   chamada desta máquina. Fora do mapa, caía em "Outras"; e como o
+   `describeTool` também não o conhecia, o cabeçalho do bloco exibia a palavra
+   `PowerShell` crua. Era literalmente isso que se via o tempo todo.
+2. **`general-purpose` fundia os subagentes.** O id era `sub:<tipo>`, e os tipos
+   genéricos do Claude Code são a maioria das delegações reais (90 de 147 num
+   histórico desta máquina). Quatro delegações na mesma leva viravam um cartão,
+   um bloco e uma skill: a do último a aparecer no stream. Hoje o genérico ganha
+   um cartão por delegação (`sub:<tipo>#<toolUseId>`), batizado pela tarefa.
+3. **A skill nomeada no prompt da delegação era invisível.** É o caminho mais
+   comum em frameworks de agentes — o orquestrador manda "leia
+   `agents/dev-system/AGENT.md` e use a skill `criar-system-api`" — e o
+   subagente executa sem nunca abrir o `SKILL.md` nem chamar a ferramenta
+   `Skill`. Agora o prompt do `Task` é lido (`skillFromMention`), com casamento
+   conservador: nome com hífen casa solto, nome de uma palavra só exige
+   marcação explícita, e nunca se olha a SAÍDA de ferramenta.
+4. **Skill invocada fora do disco virava "Outras".** As skills embutidas no
+   Claude Code não moram em `skills/<nome>/SKILL.md` de plugin nenhum. A tela
+   via a chamada, sabia o nome, e mostrava a caixa de sobras. Hoje nasce um
+   cartão na hora, com `source: "invocada"`.
+5. **A seta apontava para o grupo de ferramenta** enquanto o cartão acendia a
+   skill — as duas metades da tela discordando, e a seta, que é o que o olho
+   segue, apontando para o lado errado.
+
+A regra que amarra tudo: a skill **rege** o agente até ser trocada, e o grupo de
+ferramenta só acende quando não há skill nenhuma regendo. A troca de skill entra
+no log do bloco como marco (`▸ skill <nome> — <o que ela faz>`), que é o que
+separa o trabalho de uma skill do da seguinte. A voz segue a mesma regra: havendo
+skill em curso, ela é anunciada pelo nome em vez de "o terminal está trabalhando".
 
 ---
 

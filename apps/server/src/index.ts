@@ -131,6 +131,11 @@ const FALAS: Record<string, string[]> = {
     'Continuo procurando lá fora.',
     'Vasculhando a internet — ela não está colaborando muito.',
   ],
+  mcp: [
+    'Conversando com os serviços de fora.',
+    'Ainda esperando resposta de um servidor externo.',
+    'Buscando em outra ferramenta — depende dela agora.',
+  ],
   task: [
     'O subagente está nisso. Eu estou de olho.',
     'Deleguei, e agora sou eu que espero. Ironia.',
@@ -144,6 +149,21 @@ const FALAS: Record<string, string[]> = {
     'Nada de novo ainda, mas não é por falta de esforço.',
   ],
 };
+
+/**
+ * O que dizer quando existe uma SKILL regendo o trabalho.
+ *
+ * Ganha das falas por grupo de ferramenta porque responde outra pergunta. "O
+ * terminal está trabalhando" conta o meio; "ainda na criar-system-api" conta o
+ * que está sendo feito — e é isso que alguém que só está ouvindo precisa saber.
+ * `{skill}` é trocado pelo nome da skill em curso.
+ */
+const NA_SKILL = [
+  'Ainda na {skill}.',
+  'Seguindo com a {skill}.',
+  'A {skill} continua rodando por aqui.',
+  'Tocando a {skill} — te aviso quando fechar.',
+];
 
 /** Entram de vez em quando, misturadas às do trabalho. */
 const GRACINHAS = [
@@ -257,6 +277,9 @@ function stillWorking(): string {
   if (minutos >= 3 && sorte < 0.38) {
     return sortear(DEMORANDO).replace('{min}', String(minutos));
   }
+  // Havendo skill em curso, é ela que a voz anuncia — veja `NA_SKILL`.
+  const skill = orchestrator.currentSkillName;
+  if (skill) return sortear(NA_SKILL).replace('{skill}', skill);
   return sortear(FALAS[orchestrator.currentSkill] ?? FALAS.outro);
 }
 
@@ -291,6 +314,19 @@ const orchestrator = new Orchestrator(broadcast, claude, {
     if (!narrating || narratedError) return;
     narratedError = true;
     agentSays(`Esbarrei num erro: ${text.slice(0, 140)}`);
+  },
+  /*
+   * O turno de conversa virou trabalho de verdade (veja `INVESTIGACAO_MAXIMA`).
+   *
+   * Liga a narração — que é o que faltava para a pessoa saber que ele está vivo
+   * — e diz, uma vez só, o que aconteceu e como parar. Antes disto um turno
+   * assim ficava minutos em silêncio, com a tela cravada em "INVESTIGANDO", e a
+   * única leitura possível era "travou".
+   */
+  onEscalate: () => {
+    if (narrating) return;
+    agentSays('Isso virou um trabalho grande — vou acompanhar em voz alta. Se quiser parar, use o Abortar aqui em cima.');
+    startNarration();
   },
 });
 
@@ -369,6 +405,16 @@ async function converse(text: string, images?: ImageAttachment[]): Promise<void>
     return;
   }
 
+  /*
+   * Com plano na mesa, a primeira pergunta é "isso foi um sim?".
+   *
+   * A lista de expressões é só o atalho: acertando, a execução começa sem gastar
+   * um turno. Errando, quem decide é o modelo, no próprio turno de conversa —
+   * `decisionFrame` manda ele responder `go`/`stop` e o proíbe de investigar.
+   * Antes não havia segunda instância: o que a lista não reconhecia (como "pode
+   * seguir") virava pergunta nova, e o agente saía lendo o projeto para cumprir
+   * o plano por conta própria, sem executar nada.
+   */
   if (conversation.pending) {
     if (soundsLikeYes(said)) return void runPending();
     if (soundsLikeNo(said)) {
@@ -386,9 +432,14 @@ async function converse(text: string, images?: ImageAttachment[]): Promise<void>
   // no centro. O que fica de fora é só o texto, que neste turno é um envelope
   // JSON, e o resumo, que já vai pelo Talking.
   orchestrator.investigate(said);
+  // O modelo leu a mensagem como aprovação do plano. `stop` já derrubou o plano
+  // dentro do `say`; `go` o preservou de propósito, para ser executado aqui —
+  // depois do `finally`, com a conversa já fora do modo "pensando".
+  let aprovou = false;
   try {
     const reply = await conversation.say(said, images);
     agentSays(reply.say, reply.text);
+    aprovou = reply.mode === 'go' && Boolean(conversation.pending);
   } catch (error) {
     agentSays(`Deu problema aqui: ${(error as Error).message}`);
   } finally {
@@ -396,6 +447,7 @@ async function converse(text: string, images?: ImageAttachment[]): Promise<void>
     thinking = false;
     publishConversation();
   }
+  if (aprovou) await runPending();
 }
 
 /**
@@ -407,7 +459,7 @@ async function converse(text: string, images?: ImageAttachment[]): Promise<void>
  * tudo de novo) precisa acontecer aqui.
  */
 async function runPending(): Promise<void> {
-  const prompt = conversation.executionPrompt();
+  const prompt = conversation.executionPrompt(especialistas);
   if (!prompt) return;
   const title = conversation.pending?.title ?? 'Execução combinada';
   conversation.pending = null;
@@ -431,6 +483,18 @@ async function runPending(): Promise<void> {
   }
   else broadcast({ type: 'knowledge.reused', subjects: [] });
 
+  startNarration();
+}
+
+/**
+ * Liga o pulso da narração falada.
+ *
+ * Era código solto dentro do `runPending`, e por isso só existia para a execução
+ * combinada. O turno de conversa que vira trabalho grande (veja `onEscalate`)
+ * precisa exatamente do mesmo pulso — sem ele, a pessoa fica minutos sem sinal
+ * de vida nenhum, que é a diferença entre "está trabalhando" e "travou".
+ */
+function startNarration(): void {
   narrating = true;
   narratedError = false;
   narrationStartedAt = Date.now();
@@ -581,10 +645,19 @@ async function publishTree(): Promise<void> {
  * Roda a cada troca de projeto porque plugin de escopo "project" só vale onde
  * foi instalado: o catálogo é do projeto aberto, não da ferramenta.
  */
+/**
+ * Os nomes dos agentes instalados no projeto aberto.
+ *
+ * Guardados porque o pedido de execução os convoca (veja `executionPrompt`) — e
+ * a lista muda com o projeto, então não pode ser lida uma vez no boot.
+ */
+let especialistas: string[] = [];
+
 async function refreshCatalog(): Promise<void> {
   try {
     const catalog = await discoverCatalog(prefs.projectPath);
     orchestrator.setCatalog(catalog);
+    especialistas = catalog.agents.map((agent) => agent.name);
     console.log(`[catálogo] ${catalog.agents.length} agente(s) e ${catalog.skills.length} skill(s) instaladas`);
   } catch (error) {
     console.warn('[catálogo] não consegui varrer o disco:', (error as Error).message);

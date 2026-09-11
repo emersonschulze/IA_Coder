@@ -108,9 +108,27 @@ export function AgentBlock({ block, agent, skill, position, onOpenArtifact }: Pr
         </div>
       </header>
 
-      <div className={styles.skillPill}>
+      {/*
+        Skill e ferramenta não são a mesma coisa, e a pílula parava de dizer
+        qual das duas estava vendo: "skill: Shell — bash · powershell" anunciava
+        como habilidade o que é só o meio. Agora a skill de verdade aparece com
+        o nome e o que ela faz — que é a resposta para "o que essa skill está
+        fazendo" —, e o grupo de ferramenta se apresenta como o que é.
+      */}
+      <div
+        className={`${styles.skillPill} ${skill && skill.kind !== 'skill' ? styles.skillPillTool : ''}`}
+        // A descrição vem cortada do catálogo para caber no cartão; o texto
+        // inteiro fica a um passar de mouse, sem ocupar linha na tela.
+        title={skill?.kind === 'skill' ? `${skill.name}\n${skill.detail}` : undefined}
+      >
         <i className={styles.diamond} />
-        <span>{skill ? `skill: ${skill.name} — ${skill.detail.toLowerCase()}` : 'sem skill no momento'}</span>
+        <span>
+          {!skill
+            ? 'sem skill no momento'
+            : skill.kind === 'skill'
+              ? `skill: ${skill.name} — ${skill.detail.toLowerCase()}`
+              : `ferramenta: ${skill.name.toLowerCase()}`}
+        </span>
       </div>
 
       {block.logs.length > 0 && (

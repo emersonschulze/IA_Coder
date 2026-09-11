@@ -2,9 +2,12 @@ import type { CatalogEntry } from './discovery.js';
 import type { Agent, Skill } from './protocol.js';
 
 /**
- * As ferramentas que o Claude Code realmente usa, agrupadas por natureza.
- * Não é enfeite: é o que ele está fazendo naquele segundo — e é isso que
- * acende com o uso e recebe a seta vinda do agente.
+ * Os GRUPOS de ferramenta do Claude Code — leitura, edição, shell…
+ *
+ * Não são skills: são o "como", o meio pelo qual o trabalho acontece. Estão na
+ * lista para o caso em que NENHUMA skill está regendo o agente, que é quando o
+ * meio é, de fato, a melhor resposta para "o que está sendo feito". Assim que
+ * uma skill entra em cena, ela manda — veja `Orchestrator.reigning`.
  *
  * As skills instaladas (plugin, `.claude` do projeto ou o seu) vêm do disco,
  * pelo `discovery.ts`, e entram na mesma lista depois destas.
@@ -14,6 +17,7 @@ export const SKILLS: Skill[] = [
   { id: 'edit',   name: 'Edição',     detail: 'EDIT · WRITE',         initials: 'ED', color: '#22d3ee', inUse: false, kind: 'tool' },
   { id: 'shell',  name: 'Shell',      detail: 'BASH · POWERSHELL',    initials: 'SH', color: '#fbbf24', inUse: false, kind: 'tool' },
   { id: 'web',    name: 'Web',        detail: 'SEARCH · FETCH',       initials: 'WB', color: '#a855f7', inUse: false, kind: 'tool' },
+  { id: 'mcp',    name: 'MCP',        detail: 'SERVIDORES EXTERNOS',  initials: 'MC', color: '#f472b6', inUse: false, kind: 'tool' },
   { id: 'notes',  name: 'Plano',      detail: 'TODO · NOTAS',         initials: 'PL', color: '#34d399', inUse: false, kind: 'tool' },
   { id: 'other',  name: 'Outras',     detail: 'DEMAIS FERRAMENTAS',   initials: 'OT', color: '#94a3b8', inUse: false, kind: 'tool' },
 ];
@@ -30,16 +34,50 @@ export const DELEGATION_TOOLS = new Set(['Agent', 'Task']);
 
 export const isDelegation = (tool: string): boolean => DELEGATION_TOOLS.has(tool);
 
+/**
+ * Os tipos de subagente GENÉRICOS do próprio Claude Code.
+ *
+ * Eles não são um especialista: são um executor anônimo que recebe a
+ * especialidade pelo prompt. E é assim que a maior parte da delegação acontece
+ * na prática — num histórico real desta máquina, 90 das 147 delegações foram
+ * `general-purpose`.
+ *
+ * Isso muda a IDENTIDADE do cartão. Um `dev-system` é sempre o mesmo agente, e
+ * dois `Task` para ele são o mesmo sujeito fazendo duas coisas. Já quatro
+ * `general-purpose` disparados na mesma leva são QUATRO trabalhadores
+ * diferentes, cada um com a sua skill — e dar a todos o id `sub:general-purpose`
+ * fundia os quatro num cartão só, num bloco só, com uma skill só: a do último a
+ * aparecer no stream. Era a causa principal de "todo mundo usa skill diferente
+ * e a tela não mostra".
+ */
+export const GENERIC_AGENTS = new Set([
+  'general-purpose', 'explore', 'claude', 'fork', 'plan',
+  'statusline-setup', 'output-style-setup',
+]);
+
+export const isGenericAgent = (kind: string): boolean => GENERIC_AGENTS.has(bareName(kind));
+
 const TOOL_TO_SKILL: Record<string, string> = {
   Read: 'read', Glob: 'read', Grep: 'read', NotebookRead: 'read',
   Edit: 'edit', Write: 'edit', NotebookEdit: 'edit', MultiEdit: 'edit',
-  Bash: 'shell', BashOutput: 'shell', KillShell: 'shell',
+  /*
+   * `PowerShell` é o shell do Claude Code no Windows, irmão de primeira classe
+   * do `Bash` — e não estava aqui. Consequência na tela desta máquina: toda
+   * linha de terminal caía em "Outras" e o cabeçalho do bloco exibia a palavra
+   * "PowerShell" crua, porque `describeTool` também não a conhecia. Era o que
+   * se via o tempo todo, no lugar da skill.
+   */
+  Bash: 'shell', PowerShell: 'shell', BashOutput: 'shell', KillShell: 'shell',
   WebSearch: 'web', WebFetch: 'web',
   Task: 'task', Agent: 'task',
-  TodoWrite: 'notes', ExitPlanMode: 'notes',
+  TodoWrite: 'notes', ExitPlanMode: 'notes', EnterPlanMode: 'notes',
 };
 
-export const skillForTool = (tool: string): string => TOOL_TO_SKILL[tool] ?? 'other';
+/** Ferramenta de servidor MCP: `mcp__<servidor>__<ferramenta>`. */
+export const isMcpTool = (tool: string): boolean => tool.startsWith('mcp__');
+
+export const skillForTool = (tool: string): string =>
+  (isMcpTool(tool) ? 'mcp' : TOOL_TO_SKILL[tool]) ?? 'other';
 
 /**
  * Qual CARTÃO do painel Skill esta ferramenta acende — se é que acende algum.
@@ -58,6 +96,19 @@ export const skillCardForTool = (tool: string): string | null => {
   const group = skillForTool(tool);
   return group === 'task' ? null : group;
 };
+
+/**
+ * A skill que a ferramenta `Skill` está invocando, se for ela.
+ *
+ * Devolve a referência CRUA (`acme-agents:auditar-cnpj`), não o id de um
+ * cartão: quem resolve para cartão é o orquestrador, que também sabe inventar
+ * um quando a skill não está no disco varrido.
+ */
+export function skillInvoked(tool: string, input: Record<string, unknown>): string | null {
+  if (tool !== 'Skill') return null;
+  const reference = String(input.skill ?? input.name ?? '').trim();
+  return reference || null;
+}
 
 /**
  * A skill que este caminho representa, se ele estiver dentro da pasta de alguma.
@@ -100,6 +151,55 @@ export function skillFromText(text: string, byFolder: Map<string, string>): stri
   return null;
 }
 
+/**
+ * A skill CITADA pelo nome, num texto em que citar é deliberado.
+ *
+ * Cobre o caminho mais comum de todos — e o que a tela mais deixava passar: a
+ * DELEGAÇÃO. Vários frameworks de agentes mandam o orquestrador passar a
+ * especialidade dentro do prompt do `Task` ("leia `agents/dev-system/AGENT.md` e
+ * use a skill `criar-system-api`"). O subagente então trabalha direto, sem
+ * nunca abrir o `SKILL.md` e sem chamar a ferramenta `Skill` — e sem ler o
+ * prompt da delegação a skill dele fica invisível do começo ao fim da tarefa.
+ *
+ * Só passa por aqui texto em que mencionar uma skill significa alguma coisa:
+ * prompt de delegação e argumento de invocação. Nunca a SAÍDA de uma
+ * ferramenta — um `grep` que liste a pasta de skills citaria dezenas de nomes
+ * sem que nenhuma estivesse em uso.
+ *
+ * E o casamento é conservador de propósito:
+ *
+ * - nome com hífen (`criar-system-api`) casa solto, porque não é palavra que
+ *   apareça por acaso numa frase em português;
+ * - nome de uma palavra só (`init`, `design`, `run`) exige marcação explícita —
+ *   crase, aspas, barra ou a palavra "skill" antes —, senão qualquer pedido que
+ *   dissesse "design" acenderia um cartão que ninguém pediu.
+ *
+ * Citando mais de uma, vence a PRIMEIRA do texto, não a primeira do alfabeto: o
+ * orquestrador costuma encadear ("rode a `mapear-codigo` e depois a
+ * `criar-system-api`"), e quem entra em cena agora é a de cima da lista. A
+ * seguinte aparece sozinha quando o agente chegar nela.
+ */
+export function skillFromMention(text: string, byName: Map<string, string>): string | null {
+  if (!text || byName.size === 0) return null;
+  const alvo = text.toLowerCase();
+
+  let melhorId: string | null = null;
+  let melhorPos = Number.POSITIVE_INFINITY;
+  for (const [name, id] of byName) {
+    const padrao = name.includes('-')
+      ? new RegExp(`(?<![\\w-])${escapeRegExp(name)}(?![\\w-])`)
+      : new RegExp(`(?:skill[:\\s]+|["'\`/])${escapeRegExp(name)}(?![\\w-])`);
+    const achou = padrao.exec(alvo);
+    if (achou && achou.index < melhorPos) {
+      melhorPos = achou.index;
+      melhorId = id;
+    }
+  }
+  return melhorId;
+}
+
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 /** A última pasta de um caminho: `.../skills/planejar-e2e` → `planejar-e2e`. */
 export const folderOf = (dir: string): string =>
   normalizeDir(dir).split('/').filter(Boolean).pop() ?? '';
@@ -119,13 +219,23 @@ export const MAIN_AGENT: Agent = {
 
 const SUBAGENT_COLORS = ['#a855f7', '#34d399', '#fbbf24', '#f472b6', '#38bdf8'];
 
-export function subAgent(kind: string, index: number): Agent {
-  const name = kind.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+/**
+ * Um cartão para um subagente que não está no catálogo.
+ *
+ * @param id    a identidade dele na tela. Vem de fora porque nem sempre dá para
+ *              derivá-la do tipo — veja `GENERIC_AGENTS`.
+ * @param label o que mostrar. Para um tipo genérico quem diz alguma coisa é a
+ *              TAREFA que ele recebeu ("Validar os contratos da API"), não o
+ *              rótulo "General Purpose" repetido quatro vezes na tela.
+ */
+export function subAgent(id: string, kind: string, index: number, label?: string): Agent {
+  const titulo = (label?.trim() || kind).replace(/[-_]/g, ' ').trim();
+  const name = truncate(titulo.replace(/\b\w/g, (c) => c.toUpperCase()), 38) || 'Subagente';
   return {
-    id: `sub:${kind}`,
+    id,
     name,
     role: 'SUBAGENTE · TASK',
-    initials: name.slice(0, 2).toUpperCase(),
+    initials: initialsFor(name),
     color: SUBAGENT_COLORS[index % SUBAGENT_COLORS.length],
     state: 'idle',
   };
@@ -191,6 +301,30 @@ export function installedSkill(entry: CatalogEntry): Skill {
 }
 
 /**
+ * Um cartão para uma skill INVOCADA que não apareceu na varredura do disco.
+ *
+ * Acontece o tempo todo, e não é anomalia: as skills que vêm dentro do próprio
+ * Claude Code não moram em `skills/<nome>/SKILL.md` de plugin nenhum, e um
+ * plugin instalado depois da varredura também não está lá. Antes, invocar uma
+ * dessas acendia "Outras" — a tela via a chamada, sabia o nome da skill, e
+ * ainda assim mostrava a caixa de sobras. Se ele chamou pelo nome, o nome é a
+ * verdade: o cartão nasce agora.
+ */
+export function invokedSkill(reference: string): Skill {
+  const name = bareName(reference);
+  return {
+    id: `skill:invocada:${name}`,
+    name,
+    detail: 'INVOCADA NESTA EXECUÇÃO',
+    initials: initialsFor(name),
+    color: colorFor(name),
+    inUse: false,
+    source: 'invocada',
+    kind: 'skill',
+  };
+}
+
+/**
  * O nome que o Claude usa para chamar não é o nome do arquivo.
  *
  * Ele delega para `AcmeAgents:dev-system:AGENT` e invoca a skill como
@@ -202,24 +336,41 @@ export function bareName(reference: string): string {
   return (parts.pop() ?? reference).trim().toLowerCase();
 }
 
-/** Frase curta para o cabeçalho do bloco, a partir da ferramenta e do argumento. */
+/**
+ * Frase curta para o cabeçalho do bloco, a partir da ferramenta e do argumento.
+ *
+ * Nas ferramentas de terminal, o `description` que o próprio Claude escreve
+ * junto do comando GANHA do comando. É a diferença entre o cabeçalho dizer
+ * "Conferindo a branch atual" e despejar
+ * `git -C C:\...\ms-payment-process branch --show-current; git -C ...`: comando
+ * é log de terminal, e log de terminal não responde "o que está acontecendo".
+ */
 export function describeTool(tool: string, input: Record<string, unknown>): string {
   const file = (input.file_path ?? input.path ?? input.notebook_path) as string | undefined;
   const short = file ? file.split(/[\\/]/).slice(-2).join('/') : undefined;
+  const intencao = typeof input.description === 'string' ? input.description.trim() : '';
   switch (tool) {
     case 'Read': return `Lendo ${short ?? 'arquivo'}`;
     case 'Edit': case 'MultiEdit': return `Editando ${short ?? 'arquivo'}`;
     case 'Write': return `Escrevendo ${short ?? 'arquivo'}`;
     case 'Glob': return `Procurando ${String(input.pattern ?? '')}`.trim();
     case 'Grep': return `Buscando "${String(input.pattern ?? '')}"`;
-    case 'Bash': return `Rodando ${truncate(String(input.command ?? ''), 60)}`;
+    case 'Bash':
+    case 'PowerShell':
+      return intencao ? truncate(intencao, 70) : `Rodando ${truncate(String(input.command ?? ''), 60)}`;
     case 'WebSearch': return `Pesquisando "${truncate(String(input.query ?? ''), 40)}"`;
     case 'WebFetch': return `Abrindo ${truncate(String(input.url ?? ''), 50)}`;
     case 'Task':
     case 'Agent': return `Delegando para ${bareName(String(input.subagent_type ?? 'subagente'))}`;
     case 'Skill': return `Usando a skill ${bareName(String(input.skill ?? input.name ?? ''))}`.trim();
     case 'TodoWrite': return 'Atualizando o plano';
-    default: return tool;
+    default:
+      // `mcp__atlassian__getJiraIssue` não é nome para se mostrar a ninguém.
+      if (isMcpTool(tool)) {
+        const [, servidor = '', ferramenta = ''] = tool.split('__');
+        return `${servidor} · ${ferramenta}`.trim();
+      }
+      return intencao ? truncate(intencao, 70) : tool;
   }
 }
 
