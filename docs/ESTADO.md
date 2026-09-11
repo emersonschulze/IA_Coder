@@ -110,6 +110,37 @@ nome de um jeito um pouco diferente. O tempo está em `SILENCE_MS`, em
 **Nada é executado durante a conversa.** O agente lê e investiga à vontade, mas
 editar arquivo só depois do seu "pode mandar" — que vira um workflow comum.
 
+**A confirmação do plano tem duas instâncias, e a expressão regular é só a
+primeira.** `soundsLikeYes` é um atalho de custo zero; o que ela não reconhece
+vai para o MODELO decidir, no próprio turno de conversa (`decisionFrame`, em
+`conversation.ts`), que responde `go` ou `stop`. Existir uma segunda instância
+não é luxo: enquanto havia só a lista de verbos, **"pode seguir" não casava com
+nenhum deles** — a confirmação virava pergunta nova, o agente encontrava o plano
+no contexto e saía CUMPRINDO-O do jeito que o modo conversa permite, lendo. Dava
+um turno de dezenas de ferramentas, minutos de token, tudo rotulado
+"INVESTIGANDO", sem narração, sem delegar para ninguém, e com o texto final
+descartado no fim — porque turno de conversa não escreve na tela. A execução de
+verdade nunca começava. A lista continua sendo uma lista de verbos (e não
+`pode \w+`) de propósito: um "pode explicar melhor?" lido como sim dispararia
+uma execução que ninguém aprovou, e errar para esse lado é caro. Negação ganha
+de aprovação na mesma frase, pelo mesmo motivo.
+
+**Turno de conversa tem teto: passou de 20 ferramentas, deixa de ser
+investigação.** O rótulo não é cosmético — em modo investigação a tela não narra,
+não guarda o texto final e mostra "INVESTIGANDO" enquanto o agente queima token.
+Passando do teto (`INVESTIGACAO_MAXIMA`, em `orchestrator.ts`), o workflow vira
+`execution` na tela, a narração acorda e o Abortar passa a fazer sentido. O
+agente **não** é interrompido: o trabalho é real e matá-lo jogaria fora tudo o
+que ele já leu. O que muda é a tela parar de chamar aquilo de investigação.
+
+**O pedido de execução convoca os especialistas do catálogo.** Nada os
+convocava: o prompt dizia "pode editar arquivos e rodar comandos" e o agente
+principal fazia tudo sozinho no terminal — uma ferramenta feita para mostrar
+vários especialistas em paralelo passava a execução inteira com um bloco só na
+tela. Os nomes vêm do `discovery.ts`, do projeto aberto, **nunca de uma lista
+escrita no código**; sem agentes instalados, a linha simplesmente não existe. É
+convite, não ordem: quem decide se a tarefa se divide continua sendo o agente.
+
 **O `DATABASE_URL` é derivado do compose.** O servidor monta o endereço a partir
 de `POSTGRES_USER/PASSWORD/DB/PORT`. Uma fonte da verdade só.
 

@@ -1,7 +1,19 @@
 import type { ClaudeSession } from './claude.js';
 import type { ImageAttachment } from './protocol.js';
 
-export type ConversationMode = 'chat' | 'ask' | 'plan';
+/**
+ * `go` e `stop` só existem quando há um plano na mesa esperando resposta.
+ *
+ * São a resposta do MODELO à pergunta "isso aí foi um sim?" — e existem porque
+ * a resposta por expressão regular (`soundsLikeYes`) erra, e errar ali é caro:
+ * "pode seguir" não casava com nenhum dos verbos da lista, então a confirmação
+ * virava uma pergunta nova. O agente lia o plano no contexto, entendia que era
+ * para trabalhar, e saía LENDO o projeto inteiro para cumpri-lo — 22 ferramentas,
+ * minutos de token, tudo rotulado "INVESTIGANDO", sem narração, sem delegar para
+ * ninguém, e com o texto final descartado no fim porque turno de conversa não
+ * escreve na tela. A execução de verdade nunca começava.
+ */
+export type ConversationMode = 'chat' | 'ask' | 'plan' | 'go' | 'stop';
 
 export interface Plan {
   title: string;
@@ -57,6 +69,35 @@ const FRAME = [
 ].join('\n');
 
 /**
+ * O enquadramento EXTRA de um turno com plano na mesa.
+ *
+ * Um turno desses não é uma pergunta nova: é a pessoa respondendo ao plano. A
+ * única coisa a decidir é se foi sim, não, ou nenhum dos dois — e quem decide
+ * bem isso é o modelo, não uma lista de verbos.
+ *
+ * A proibição de investigar é a metade importante. Sem ela, o agente lê "pode
+ * seguir", encontra o plano no contexto e começa a CUMPRI-LO ali mesmo, do jeito
+ * que o modo conversa permite: lendo. Sai um turno de dezenas de ferramentas que
+ * não altera nada, não narra nada, não delega para ninguém e termina com o texto
+ * descartado — todo o custo da execução e nenhum dos efeitos.
+ */
+const decisionFrame = (title: string): string => [
+  `ATENÇÃO: existe um plano na mesa esperando resposta — "${title}".`,
+  'A mensagem abaixo é a resposta da pessoa a ESSE plano, não um pedido novo.',
+  '',
+  'Decida apenas isto e responda no mesmo formato JSON:',
+  '- Aprovou (qualquer forma de sim: "pode seguir", "bora", "fechado", "vai lá"…)?',
+  '  → {"mode":"go","say":"<uma frase curta confirmando que você vai começar>"}',
+  '- Recusou ou pediu para esperar?',
+  '  → {"mode":"stop","say":"<uma frase curta>"}',
+  '- Não é nem uma coisa nem outra (mudou o pedido, perguntou outra coisa)?',
+  '  → responda normalmente com "chat", "ask" ou "plan".',
+  '',
+  'NESTE turno não leia arquivo e não rode comando: você está respondendo a uma',
+  'confirmação, não investigando. A execução começa depois, por outro caminho.',
+].join('\n');
+
+/**
  * Conduz a conversa por voz.
  *
  * Cada rodada é um turno "silencioso" no mesmo processo do Claude: o contexto
@@ -109,9 +150,14 @@ export class Conversation {
     // que já foi conversado, senão ele responde sem saber do que se trata.
     const enquadradoAntes = this.framedGeneration;
     const precisaEnquadrar = enquadradoAntes !== this.claude.generation;
-    const prompt = precisaEnquadrar
-      ? [FRAME, this.recap(), `O desenvolvedor disse: "${text}"`].filter(Boolean).join('\n\n')
-      : `O desenvolvedor disse: "${text}"`;
+    // Com plano na mesa, o turno vira uma DECISÃO — veja `decisionFrame`.
+    const decisao = this.pending ? decisionFrame(this.pending.title) : '';
+    const prompt = [
+      precisaEnquadrar ? FRAME : '',
+      precisaEnquadrar ? this.recap() : '',
+      decisao,
+      `O desenvolvedor disse: "${text}"`,
+    ].filter(Boolean).join('\n\n');
     this.framedGeneration = this.claude.generation;
 
     // 4 minutos SEM SINAL DE VIDA, não 4 minutos de trabalho: cada arquivo lido
@@ -134,7 +180,11 @@ export class Conversation {
     // O que ele lembra é o que ele DISSE por inteiro, não o resumo falado:
     // guardar a versão curta apagava metade da própria resposta do contexto.
     this.history.push({ role: 'agent', text: reply.text ?? reply.say });
-    this.pending = reply.mode === 'plan' ? (reply.plan ?? null) : null;
+    // `go` é o único que PRESERVA o plano: quem vai executá-lo é o passo
+    // seguinte (`runPending`), e limpá-lo aqui deixaria a aprovação sem o que
+    // aprovar. `plan` troca pelo novo; qualquer outro modo o derruba.
+    if (reply.mode === 'plan') this.pending = reply.plan ?? null;
+    else if (reply.mode !== 'go') this.pending = null;
     return reply;
   }
 
@@ -152,15 +202,36 @@ export class Conversation {
     ].join('\n');
   }
 
-  /** Vira o plano confirmado em um pedido de execução para o workflow. */
-  executionPrompt(): string | null {
+  /**
+   * Vira o plano confirmado em um pedido de execução para o workflow.
+   *
+   * @param especialistas os agentes instalados nesta máquina, achados em disco
+   *   pelo `discovery.ts`. Existem no prompt porque nada os convocava: o pedido
+   *   dizia "pode editar arquivos e rodar comandos" e o agente principal fazia
+   *   tudo sozinho, no terminal — uma ferramenta feita para MOSTRAR vários
+   *   especialistas trabalhando em paralelo passava a execução inteira com um
+   *   bloco só na tela. É um convite, não uma ordem: quem decide se a tarefa se
+   *   divide continua sendo ele, e os nomes vêm do catálogo do projeto aberto,
+   *   nunca de uma lista escrita aqui.
+   */
+  executionPrompt(especialistas: string[] = []): string | null {
     if (!this.pending) return null;
     const { title, steps } = this.pending;
+    const convite = especialistas.length > 0
+      ? [
+        '',
+        `Especialistas instalados neste projeto: ${especialistas.join(', ')}.`,
+        'Quando partes do trabalho forem independentes entre si, delegue cada uma ao',
+        'especialista certo (ferramenta Agent, em paralelo) em vez de fazer tudo sozinho.',
+        'Diga no prompt de cada um qual skill ele deve usar.',
+      ]
+      : [];
     return [
       `Execute agora o que combinamos: ${title}`,
       '',
       'Passos acordados:',
       ...steps.map((step, index) => `${index + 1}. ${step}`),
+      ...convite,
       '',
       'Pode editar arquivos e rodar comandos. Ao terminar, resuma em duas frases o que mudou.',
     ].join('\n');
@@ -183,8 +254,10 @@ export function parseReply(raw: string): Reply {
     try {
       const parsed = JSON.parse(unfenced.slice(start, end + 1)) as Partial<Reply>;
       if (parsed.say) {
-        const mode: ConversationMode =
-          parsed.mode === 'ask' || parsed.mode === 'plan' ? parsed.mode : 'chat';
+        const conhecidos: ConversationMode[] = ['ask', 'plan', 'go', 'stop'];
+        const mode: ConversationMode = conhecidos.includes(parsed.mode as ConversationMode)
+          ? (parsed.mode as ConversationMode)
+          : 'chat';
         return {
           mode,
           say: String(parsed.say).trim(),
@@ -250,13 +323,38 @@ function normalizePlan(plan: Plan | undefined): Plan | undefined {
   };
 }
 
-/** Reconhece um "pode ir" falado, sem precisar de botão. */
+/**
+ * Reconhece um "pode ir" falado, sem precisar de botão.
+ *
+ * É um ATALHO de custo zero, não a autoridade: o que não casar aqui vai para o
+ * modelo decidir (`decisionFrame`), que é quem acerta as formas que ninguém
+ * previu. A lista tinha quatro verbos depois de "pode" — e "pode seguir", que
+ * não estava entre eles, custava um turno inteiro de investigação inútil.
+ *
+ * O verbo continua sendo uma LISTA, e não um curinga, porque errar para o lado
+ * do sim é caro: com `pode \w+`, um "pode explicar melhor?" dispararia a
+ * execução do plano sem ninguém ter aprovado nada. Frase que não casa aqui só
+ * custa um turno curto de decisão; frase que casa errado custa a execução.
+ */
+const APROVACAO = [
+  'ir', 'seguir', 'fazer', 'mandar', 'executar', 'come[çc]ar', 'continuar',
+  'prosseguir', 'tocar', 'rodar', 'avan[çc]ar', 'implementar', 'aplicar',
+].join('|');
+
 export function soundsLikeYes(text: string): boolean {
-  return /\b(pode (ir|fazer|mandar|executar)|manda(r)? (ver|bala)?|isso|isso a[ií]|confirmo|confirmado|vai(\s|$)|bora|faz(er)? isso|sim|ok|certo|perfeito|beleza|t[aá] (bom|certo)|executa(r)?)\b/i
-    .test(text.trim());
+  const yes = new RegExp(
+    `\\b(pode (${APROVACAO})|manda(r)?( ver| bala)?|isso|isso a[ií]|confirmo|confirmado|aprovado|`
+    + 'fechado|vai(\\s|$)|vai l[áa]|vamos( l[áa])?|bora|segue|prossegue|faz(er)? isso|'
+    + 'sim|ok|certo|perfeito|beleza|t[aá] (bom|certo)|executa(r)?)\\b',
+    'i',
+  );
+  // Negação manda mais do que aprovação: "não pode seguir" casa nos dois, e
+  // ler isso como sim dispara uma execução que ninguém pediu. O caso oposto
+  // ("não, pode ir") custa só repetir a frase.
+  return !soundsLikeNo(text) && yes.test(text.trim());
 }
 
 export function soundsLikeNo(text: string): boolean {
-  return /\b(n[ãa]o|nao|espera|calma|para|cancela(r)?|deixa (pra l[áa]|quieto)|melhor n[ãa]o)\b/i
+  return /\b(n[ãa]o|nao|espera(r)?|calma|para|cancela(r)?|deixa (pra l[áa]|quieto)|melhor n[ãa]o)\b/i
     .test(text.trim());
 }

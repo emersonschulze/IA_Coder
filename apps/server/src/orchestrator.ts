@@ -27,10 +27,34 @@ const LOG_LIMIT = 200;
 /** O quanto de um turno chega à tela. Ver `Orchestrator.mode`. */
 export type OrchestratorMode = 'full' | 'investigation' | 'silent';
 
+/**
+ * A partir de quantas ferramentas um turno de CONVERSA deixa de ser conversa.
+ *
+ * Ler um punhado de arquivos para responder bem é investigação legítima. Passar
+ * de duas dezenas não é: é execução com o rótulo errado — e o rótulo errado tem
+ * consequência, não é cosmética. Em modo investigação a tela não narra, não
+ * guarda o texto final e mostra "INVESTIGANDO" enquanto o agente queima minutos
+ * de token. Quem está olhando não tem como saber se aquilo ainda é a resposta de
+ * uma pergunta ou um trabalho que fugiu do controle — e foi exatamente assim que
+ * um "pode seguir" não reconhecido virou 22 ferramentas sem produzir nada.
+ *
+ * O valor é generoso de propósito: uma análise de repositório grande passa fácil
+ * de dez leituras antes de responder, e cortar cedo demais reclassificaria
+ * trabalho honesto.
+ */
+const INVESTIGACAO_MAXIMA = 20;
+
 /** Ganchos para quem quiser narrar a execução em voz alta. */
 export interface OrchestratorHooks {
   onFinish?: (state: 'done' | 'failed' | 'cancelled', summary: string) => void;
   onError?: (text: string) => void;
+  /**
+   * O turno de conversa passou de investigação a trabalho de verdade.
+   *
+   * Quem escuta liga a narração e avisa a pessoa: daqui em diante é uma execução
+   * comum na tela, com voz e com o Abortar valendo.
+   */
+  onEscalate?: (title: string) => void;
 }
 
 /**
@@ -341,6 +365,26 @@ export class Orchestrator {
     this.investigationTitle = null;
   }
 
+  /**
+   * Passou do teto: a "investigação" vira execução na tela. Veja
+   * `INVESTIGACAO_MAXIMA`.
+   *
+   * Não interrompemos o agente — o trabalho é real e matá-lo jogaria fora tudo o
+   * que ele já leu. O que muda é a tela parar de chamar aquilo de investigação:
+   * o cabeçalho vira execução, o texto dele volta a ser guardado, e a narração
+   * acorda. É a diferença entre um processo que parece travado e um trabalho
+   * longo que você está acompanhando e pode abortar quando quiser.
+   */
+  private escalateIfNeeded(): void {
+    if (this.mode !== 'investigation' || this.toolCount <= INVESTIGACAO_MAXIMA) return;
+    this.mode = 'full';
+    if (this.workflow) {
+      this.workflow.kind = 'execution';
+      this.emit({ type: 'workflow.updated', patch: { id: this.workflow.id, kind: 'execution' } });
+    }
+    this.hooks.onEscalate?.(this.workflow?.title ?? 'o que você pediu');
+  }
+
   private openWorkflow(title: string, kind: 'execution' | 'investigation'): void {
     this.clearLinks();
     this.blocks.clear();
@@ -444,6 +488,7 @@ export class Orchestrator {
     const action = describeTool(tool.name, tool.input);
 
     this.toolCount += 1;
+    this.escalateIfNeeded();
     /*
      * Descobriu uma skill nova? Ela passa a reger este agente daqui em diante,
      * substituindo a anterior — é assim que a troca de skill aparece na tela.

@@ -115,6 +115,16 @@ export function ConversationPanel({
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [saved, setSaved] = useState(false);
   /*
+   * Você já disse que não quer guardar esta análise.
+   *
+   * O "✕ Descartar" mandava o comando ao servidor e não mexia em nada na tela: o
+   * servidor responde limpando os assuntos reaproveitados, que só decidem o
+   * RÓTULO do botão de guardar ("Atualizar «x»" vs. "Guardar no Tree"). O convite
+   * continuava lá, igual, e o clique parecia não ter função nenhuma. Quem sabe
+   * que o convite existe é esta tela, então é ela que tem de tirá-lo.
+   */
+  const [discarded, setDiscarded] = useState(false);
+  /*
    * Já respondi este plano.
    *
    * Sem isto o clique não deixava rastro nenhum na tela: com o servidor fora do
@@ -136,8 +146,9 @@ export function ConversationPanel({
   const out = useVoiceOut();
   const speak = out.speak;
 
-  // O botão de guardar só faz sentido depois que a análise terminou bem.
-  const canSave = workflowState === 'done' && treeReady;
+  // O botão de guardar só faz sentido depois que a análise terminou bem — e
+  // some de vez quando você descarta.
+  const canSave = workflowState === 'done' && treeReady && !discarded;
   /*
    * Guardar e atualizar são ações diferentes e a tela precisa dizer qual é.
    *
@@ -148,7 +159,11 @@ export function ConversationPanel({
    * depois.
    */
   const updating = reused[0] ?? null;
-  useEffect(() => setSaved(false), [workflowState]);
+  // Análise nova, convite novo: os dois voltam a valer.
+  useEffect(() => {
+    setSaved(false);
+    setDiscarded(false);
+  }, [workflowState]);
   // Plano novo (ou plano que sumiu) libera os botões de novo.
   useEffect(() => setAnswered(false), [conversation.pending]);
 
@@ -421,6 +436,7 @@ export function ConversationPanel({
                       onClick={() => {
                         onDiscardKnowledge();
                         setSaved(false);
+                        setDiscarded(true);
                       }}
                       title="Não guarda nada — esta análise não vira assunto do Tree"
                     >
